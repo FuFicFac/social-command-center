@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Social Command Center</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a; --text:#e8eaf0; --dim:#8b93a5;
+  --accent:#6ee7a8; --accent-ink:#06261a; --warn:#f5c35b; --bad:#ff6b6b; --info:#7cb4ff;
+  --yt:#ff4e45; --ig:#e1306c; --fb:#4b8bf5; --tt:#25f4ee;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){
+  --bg:#f5f6f8; --panel:#fff; --panel2:#f0f2f5; --line:#dde1e8; --text:#161a22; --dim:#5d6575;
+  --accent:#0f9d58; --accent-ink:#fff; --warn:#a36b00; --bad:#c62828; --info:#1a5fd1;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:14px 20px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+h1{font-size:17px;margin:0;letter-spacing:.2px}
+h1 span{color:var(--accent)}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;background:var(--panel);display:flex;gap:6px;align-items:center}
+.dot{width:8px;height:8px;border-radius:50%}
+.spacer{flex:1}
+button{font:inherit;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:8px;padding:6px 12px;cursor:pointer}
+button:hover{border-color:var(--dim)}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:600}
+button.danger{color:var(--bad)}
+button:disabled{opacity:.45;cursor:default}
+.tabs{display:flex;gap:4px;padding:12px 20px 0}
+.tab{padding:6px 12px;border-radius:8px 8px 0 0;cursor:pointer;color:var(--dim)}
+.tab.on{color:var(--text);background:var(--panel)}
+main{display:grid;grid-template-columns:1fr 320px;gap:16px;padding:0 20px 40px}
+@media(max-width:1000px){main{grid-template-columns:1fr}}
+.list{display:flex;flex-direction:column;gap:12px;background:var(--panel);padding:12px;border-radius:0 10px 10px 10px}
+.card{display:grid;grid-template-columns:150px 1fr;gap:14px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px}
+@media(max-width:620px){.card{grid-template-columns:1fr}}
+video{width:150px;aspect-ratio:9/16;border-radius:8px;background:#000;object-fit:cover}
+.meta{font-size:12px;color:var(--dim);margin-bottom:6px;word-break:break-all}
+label{display:block;font-size:12px;color:var(--dim);margin:8px 0 3px}
+input[type=text],textarea,input[type=datetime-local]{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:7px 9px;font:inherit}
+textarea{min-height:64px;resize:vertical}
+.count{float:right;font-size:11px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.targets label{display:inline-flex;gap:5px;align-items:center;margin:0 10px 0 0;color:var(--text);font-size:13px}
+details{margin-top:8px}
+summary{cursor:pointer;color:var(--dim);font-size:12px}
+.deliv{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.pill{font-size:12px;border-radius:6px;padding:3px 8px;border:1px solid var(--line);background:var(--bg);max-width:100%}
+.pill a{color:var(--info)}
+.s-published{border-color:var(--accent);color:var(--accent)}
+.s-failed,.s-needs_review{border-color:var(--bad);color:var(--bad)}
+.s-processing,.s-uploading{border-color:var(--info);color:var(--info)}
+.s-inbox,.s-private{border-color:var(--warn);color:var(--warn)}
+.badge{font-size:11px;padding:2px 7px;border-radius:5px;background:var(--bg);border:1px solid var(--line)}
+.badge.ok{color:var(--accent);border-color:var(--accent)}
+.err{color:var(--bad);font-size:12px;margin-top:6px;white-space:pre-wrap}
+aside{background:var(--panel);border-radius:10px;padding:12px;align-self:start;position:sticky;top:76px;max-height:calc(100vh - 96px);overflow:auto}
+aside h3{margin:0 0 8px;font-size:13px}
+.ev{font-size:12px;border-bottom:1px solid var(--line);padding:5px 0;color:var(--dim)}
+.ev b{color:var(--text);font-weight:500}
+.ev.error b{color:var(--bad)} .ev.warn b{color:var(--warn)}
+.empty{padding:40px;text-align:center;color:var(--dim)}
+dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;max-width:440px}
+dialog::backdrop{background:rgba(0,0,0,.55)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Social <span>Command</span> Center</h1>
+  <div class="chips" id="chips"></div>
+  <div class="spacer"></div>
+  <button id="importBtn">Import from Shorts Ready</button>
+  <button id="runBtn">Run scheduler</button>
+</header>
+<div class="tabs" id="tabs"></div>
+<main>
+  <section class="list" id="list"></section>
+  <aside><h3>Activity</h3><div id="events"></div></aside>
+</main>
+<dialog id="confirm">
+  <h3 style="margin-top:0">Post live now?</h3>
+  <p id="confirmText"></p>
+  <div class="row" style="justify-content:flex-end">
+    <button id="cancelPost">Cancel</button><button class="primary" id="doPost">Post it</button>
+  </div>
+</dialog>
+<script>
+const TOKEN = "__SCC_TOKEN__";
+const PLAT = {youtube:["YouTube","--yt"],instagram:["Instagram","--ig"],facebook:["Facebook","--fb"],tiktok:["TikTok","--tt"]};
+const LIMIT = {youtube:5000,instagram:2200,facebook:63206,tiktok:2200};
+let S = null, tab = "drafts", dirty = new Set(), errors = {};
+
+const $ = (s, el=document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const api = async (path, body) => {
+  const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json","X-SCC-Token":TOKEN}, body:JSON.stringify(body||{})});
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok) throw Object.assign(new Error(j.error||r.statusText), {issues:j.issues});
+  return j;
+};
+const toLocalInput = iso => {
+  if (!iso) return "";
+  const d = new Date(iso); const p = n => String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+function bucket(p){
+  const ds = Object.values(p.deliveries).filter(d => d.status !== "skipped");
+  if (ds.some(d => ["failed","needs_review"].includes(d.status))) return "attention";
+  if (ds.length && ds.every(d => ["published","private","inbox","simulated"].includes(d.status))) return "posted";
+  if (p.approved_at) return "queued";
+  return "drafts";
+}
+
+function renderChips(){
+  $("#chips").innerHTML = Object.entries(S.platforms).map(([p,v]) =>
+    `<span class="chip" title="${esc(v.detail)}"><span class="dot" style="background:var(${PLAT[p][1]})"></span>${PLAT[p][0]}
+     <span class="badge ${v.ready && v.route!=="dryrun" ? "ok":""}">${v.route==="dryrun"?"dry run":v.route.replace("_","-")}${v.ready?"":" · setup"}</span></span>`).join("");
+}
+
+function renderTabs(){
+  const n = {drafts:0,queued:0,attention:0,posted:0};
+  S.posts.forEach(p => n[bucket(p)]++);
+  const names = {drafts:"Drafts",queued:"Approved / scheduled",attention:"Needs attention",posted:"Posted"};
+  $("#tabs").innerHTML = Object.keys(names).map(k =>
+    `<div class="tab ${k===tab?"on":""}" data-tab="${k}">${names[k]} (${n[k]})</div>`).join("");
+}
+
+function delivPills(p){
+  return Object.entries(p.deliveries).filter(([,d]) => d.status!=="skipped").map(([pl,d]) => {
+    const link = d.url ? ` · <a href="${esc(d.url)}" target="_blank" rel="noopener">open</a>` : "";
+    const note = d.error || d.meta?.note || "";
+    return `<span class="pill s-${d.status}" title="${esc(note)}">${PLAT[pl][0]}: ${d.status.replace("_"," ")}${link}${note?` — ${esc(note.slice(0,90))}`:""}</span>`;
+  }).join("");
+}
+
+function card(p){
+  const job = S.jobs[p.id];
+  const targets = Object.entries(p.deliveries).filter(([,d]) => d.status!=="skipped").map(([k])=>k);
+  const locked = bucket(p) === "posted";
+  const ov = p.overrides || {};
+  return `<div class="card" data-id="${p.id}">
+    <video src="/media/${p.id}" preload="metadata" controls playsinline muted></video>
+    <div>
+      <div class="meta">${esc(p.video_path.split("/").pop())} ${p.approved_at?'<span class="badge ok">approved</span>':'<span class="badge">draft</span>'} ${job?`<span class="badge">${esc(job)}…</span>`:""}</div>
+      <label>Title (YouTube) <span class="count" data-for="title"></span></label>
+      <input type="text" name="title" maxlength="100" value="${esc(p.title)}" ${locked?"disabled":""}>
+      <label>Caption (default for every platform)</label>
+      <textarea name="caption" ${locked?"disabled":""}>${esc(p.caption)}</textarea>
+      <details ${Object.keys(ov).length?"open":""}><summary>Per-platform captions (optional overrides)</summary>
+        ${["tiktok","instagram","facebook","youtube"].map(pl => `<label>${PLAT[pl][0]}</label>
+          <textarea name="ov-${pl}" placeholder="uses the default caption" ${locked?"disabled":""}>${esc(ov[pl]?.caption||"")}</textarea>`).join("")}
+      </details>
+      <div class="row targets">${Object.keys(PLAT).map(pl =>
+        `<label><input type="checkbox" name="t-${pl}" ${targets.includes(pl)?"checked":""} ${locked?"disabled":""}>${PLAT[pl][0]}</label>`).join("")}
+      </div>
+      <div class="row">
+        <label style="margin:0">Post at</label>
+        <input type="datetime-local" name="when" style="width:auto" value="${toLocalInput(p.scheduled_at)}" ${locked?"disabled":""}>
+        <span class="meta" style="margin:0">blank = as soon as approved</span>
+      </div>
+      <div class="deliv">${delivPills(p)}</div>
+      <div class="row">
+        ${locked ? "" : `<button data-act="captions" ${job?"disabled":""}>✨ AI captions</button>
+        <button data-act="save">Save</button>
+        ${p.approved_at ? `<button data-act="unapprove">Unapprove</button>` : `<button data-act="approve">Approve</button>`}
+        <button class="primary" data-act="publish" ${job?"disabled":""}>Post now</button>`}
+        ${Object.values(p.deliveries).some(d=>["failed","needs_review"].includes(d.status)) ? `<button data-act="retry">Retry failed</button>`:""}
+        <span class="spacer"></span>
+        <button class="danger" data-act="remove">Remove</button>
+      </div>
+      <div class="err">${esc(errors[p.id]||"")}</div>
+    </div></div>`;
+}
+
+function render(){
+  renderChips(); renderTabs();
+  const posts = S.posts.filter(p => bucket(p) === tab);
+  const list = $("#list");
+  const existing = new Map([...list.querySelectorAll(".card")].map(c => [c.dataset.id, c]));
+  if (!posts.length){ list.innerHTML = `<div class="empty">${S.posts.length ? "Nothing here." : "No shorts queued yet — hit <b>Import from Shorts Ready</b>."}</div>`; return; }
+  const frag = document.createDocumentFragment();
+  for (const p of posts){
+    const old = existing.get(p.id);
+    if (old && (dirty.has(p.id) || old.contains(document.activeElement))){
+      old.querySelector(".deliv").innerHTML = delivPills(p);   // keep the user's typing
+      frag.appendChild(old); continue;
+    }
+    const sig = JSON.stringify([p.updated_at, p.deliveries, S.jobs[p.id], errors[p.id]]);
+    if (old && old.dataset.sig === sig){ frag.appendChild(old); continue; }
+    const t = document.createElement("template"); t.innerHTML = card(p).trim();
+    const el = t.content.firstChild; el.dataset.sig = sig; frag.appendChild(el);
+  }
+  list.replaceChildren(frag);
+  list.querySelectorAll(".card").forEach(updateCounts);
+}
+
+function updateCounts(c){
+  const t = c.querySelector('[name=title]'); const n = c.querySelector('[data-for=title]');
+  if (t && n) n.textContent = `${t.value.length}/100`;
+}
+
+function renderEvents(){
+  $("#events").innerHTML = S.events.map(e =>
+    `<div class="ev ${e.level}"><b>${esc(e.platform||"")}</b> ${esc(e.message)}<br>${new Date(e.at).toLocaleString()}</div>`).join("") || '<div class="ev">Nothing yet.</div>';
+}
+
+async function refresh(){
+  S = await (await fetch("/api/state")).json();
+  render(); renderEvents();
+}
+
+function collect(c){
+  const overrides = {};
+  ["tiktok","instagram","facebook","youtube"].forEach(pl => {
+    const v = c.querySelector(`[name=ov-${pl}]`).value.trim(); if (v) overrides[pl] = {caption:v};
+  });
+  const when = c.querySelector("[name=when]").value;
+  return {
+    title: c.querySelector("[name=title]").value,
+    caption: c.querySelector("[name=caption]").value,
+    overrides,
+    targets: Object.keys(PLAT).filter(pl => c.querySelector(`[name=t-${pl}]`).checked),
+    scheduled_at: when ? new Date(when).toISOString() : null,
+  };
+}
+
+let pending = null;
+document.addEventListener("input", e => { const c = e.target.closest(".card"); if (c){ dirty.add(c.dataset.id); updateCounts(c);} });
+document.addEventListener("click", async e => {
+  const tabEl = e.target.closest("[data-tab]");
+  if (tabEl){ tab = tabEl.dataset.tab; render(); return; }
+  const b = e.target.closest("button[data-act]"); if (!b) return;
+  const c = b.closest(".card"); const id = c.dataset.id; const act = b.dataset.act;
+  delete errors[id];
+  try {
+    if (act === "save" || (["approve","publish"].includes(act) && dirty.has(id))){
+      await api(`/api/posts/${id}`, collect(c)); dirty.delete(id);
+    }
+    if (act === "save"){ /* done */ }
+    else if (act === "publish"){
+      const post = S.posts.find(p => p.id === id);
+      const live = collect(c).targets.map(p => `${PLAT[p][0]} (${S.platforms[p].route==="dryrun"?"dry run":S.platforms[p].route.replace("_","-")})`);
+      $("#confirmText").textContent = `${post.video_path.split("/").pop()} → ${live.join(", ")}`;
+      pending = id; $("#confirm").showModal(); return;
+    }
+    else if (act === "retry"){
+      const post = S.posts.find(p => p.id === id);
+      await api(`/api/posts/${id}/retry`, {platforms:Object.entries(post.deliveries).filter(([,d])=>["failed","needs_review"].includes(d.status)).map(([k])=>k)});
+    }
+    else if (act === "remove"){ if (!confirm("Remove from the queue? (the video file stays)")) return; await api(`/api/posts/${id}/remove`); }
+    else await api(`/api/posts/${id}/${act}`);
+  } catch(err){ errors[id] = err.message + (err.issues ? "\n" + err.issues.join("\n") : ""); }
+  refresh();
+});
+$("#cancelPost").onclick = () => $("#confirm").close();
+$("#doPost").onclick = async () => {
+  $("#confirm").close();
+  try { await api(`/api/posts/${pending}/publish`, {confirm:"post"}); } catch(err){ errors[pending] = err.message; }
+  refresh();
+};
+$("#importBtn").onclick = async () => { const r = await api("/api/import"); alert(`Imported ${r.imported} new short(s) as drafts.`); refresh(); };
+$("#runBtn").onclick = async () => { await api("/api/run").catch(err => alert(err.message)); setTimeout(refresh, 800); };
+
+refresh(); setInterval(refresh, 4000);
+</script>
+</body>
+</html>

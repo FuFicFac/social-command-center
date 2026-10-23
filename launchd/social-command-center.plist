@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.creator.social-command-center</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/you/.local/bin/uv</string>
+    <string>--directory</string>
+    <string>/path/to/social-command-center</string>
+    <string>run</string><string>scc</string><string>run</string>
+  </array>
+  <key>StartInterval</key><integer>60</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/path/to/social-command-center/data/scheduler.log</string>
+  <key>StandardErrorPath</key><string>/path/to/social-command-center/data/scheduler.log</string>
+</dict>
+</plist>

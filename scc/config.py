@@ -1,0 +1,101 @@
+"""Non-secret configuration (config.toml) and paths.
+
+Secrets never live here — they go in the macOS Keychain (see secrets.py).
+"""
+
+from __future__ import annotations
+
+import os
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+PLATFORMS = ("youtube", "instagram", "facebook", "tiktok")
+ROUTES = ("direct", "upload_post", "dryrun")
+
+ROOT = Path(os.environ.get("SCC_HOME", Path(__file__).resolve().parent.parent))
+CONFIG_PATH = ROOT / "config.toml"
+DATA_DIR = ROOT / "data"
+DB_PATH = DATA_DIR / "scc.sqlite3"
+LOCK_PATH = DATA_DIR / "run.lock"
+SHORTS_READY = Path("~/Movies/Shorts Ready")
+
+DEFAULTS: dict[str, dict[str, Any]] = {
+    # Where each platform's posts go. dryrun = log what would happen, touch nothing.
+    "routing": {p: "dryrun" for p in PLATFORMS},
+    "general": {"timezone": "America/Los_Angeles", "shorts_folder": str(SHORTS_READY)},
+    "youtube": {
+        "client_id": "",
+        "privacy": "public",
+        "category_id": "28",
+        "made_for_kids": False,
+        "add_shorts_tag": True,
+    },
+    "meta": {
+        "app_id": "",
+        "page_id": "",
+        "ig_user_id": "",
+        "graph_version": "v23.0",
+        "share_reel_to_feed": True,
+    },
+    "tiktok": {
+        "client_key": "",
+        # inbox  = video lands in the TikTok app's inbox; you tap Post (works without audit)
+        # direct = posts straight to the profile; public only once TikTok audits the app
+        "mode": "inbox",
+        "privacy_level": "SELF_ONLY",
+        "redirect_port": 8790,
+    },
+    "upload_post": {"user": "", "facebook_page_id": ""},
+}
+
+
+@dataclass
+class Config:
+    data: dict[str, dict[str, Any]]
+
+    def get(self, section: str, key: str) -> Any:
+        return self.data.get(section, {}).get(key, DEFAULTS.get(section, {}).get(key))
+
+    def route(self, platform: str) -> str:
+        r = self.get("routing", platform) or "dryrun"
+        if r not in ROUTES:
+            raise ValueError(f"routing.{platform} = {r!r}; must be one of {ROUTES}")
+        return r
+
+    def set(self, section: str, key: str, value: Any) -> None:
+        self.data.setdefault(section, {})[key] = value
+
+
+def load(path: Path = CONFIG_PATH) -> Config:
+    merged = {s: dict(v) for s, v in DEFAULTS.items()}
+    if path.exists():
+        with path.open("rb") as fh:
+            for section, values in tomllib.load(fh).items():
+                if isinstance(values, dict):
+                    merged.setdefault(section, {}).update(values)
+    return Config(merged)
+
+
+def _toml_value(v: Any) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int | float):
+        return str(v)
+    s = str(v).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{s}"'
+
+
+def save(cfg: Config, path: Path = CONFIG_PATH) -> None:
+    lines = [
+        "# Social Command Center config. Secrets are NOT stored here (macOS Keychain).",
+        "# routing values: direct | upload_post | dryrun",
+        "",
+    ]
+    for section, values in cfg.data.items():
+        lines.append(f"[{section}]")
+        for k, v in values.items():
+            lines.append(f"{k} = {_toml_value(v)}")
+        lines.append("")
+    path.write_text("\n".join(lines))
