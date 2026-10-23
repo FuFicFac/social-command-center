@@ -36,7 +36,33 @@ class UploadPost:
         return True, "ready"
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Apikey {secrets.require('upload_post.api_key')}"}
+        try:
+            return {"Authorization": f"Apikey {secrets.require('upload_post.api_key')}"}
+        except secrets.MissingSecret as e:
+            raise NotSubmitted(f"Upload-Post is not connected ({e}) — run: scc connect "
+                               "upload-post") from e
+
+    def verify(self, platform: str) -> tuple[bool, str]:
+        """GET /uploadposts/users lists profiles (401 = bad key); confirm ours exists."""
+        try:
+            user = self.cfg.get("upload_post", "user")
+            if not user:
+                return False, "set upload_post.user (the profile name in Upload-Post)"
+            with client(20) as http:
+                r = http.get(f"{API}/uploadposts/users", headers=self._headers())
+            if r.status_code == 401:
+                return False, "Upload-Post rejected the API key (401)"
+            if r.status_code >= 400:
+                return False, f"Upload-Post HTTP {r.status_code}"
+            profiles = r.json().get("profiles") or []
+            mine = next((p for p in profiles if p.get("username") == user), None)
+            if mine is None:
+                names = ", ".join(str(p.get("username")) for p in profiles) or "none"
+                return False, f"no Upload-Post profile named {user!r} (found: {names})"
+            connected = sorted(k for k, v in (mine.get("social_accounts") or {}).items() if v)
+            return True, f"profile '{user}' — connected: {', '.join(connected) or 'nothing yet'}"
+        except Exception as e:
+            return False, str(e) if isinstance(e, NotSubmitted) else e.__class__.__name__
 
     def publish(self, post: dict[str, Any], platforms: list[str], video: Path,
                 log: Logger) -> dict[str, Result]:
@@ -58,7 +84,12 @@ class UploadPost:
             else:
                 # TikTok / Instagram / Facebook use "title" as the post caption.
                 form.append((f"{p}_title", c["caption"] or c["title"]))
+            if p == "instagram":
+                form.append(("media_type", "REELS"))
+                form.append(("share_to_feed",
+                             "true" if self.cfg.get("meta", "share_reel_to_feed") else "false"))
             if p == "facebook":
+                form.append(("facebook_media_type", "REELS"))
                 form.append(("facebook_description", c["caption"]))
                 page = self.cfg.get("upload_post", "facebook_page_id")
                 if page:
@@ -68,11 +99,16 @@ class UploadPost:
             resp = commit(
                 lambda: http.post(f"{API}/upload", headers={**self._headers(),
                                   "Idempotency-Key": request_id},
-                                  data=form, files={"video": (video.name, fh, "video/mp4")}),
+                                  data=_as_fields(form), files={"video": (video.name, fh, "video/mp4")}),
                 "upload-post upload",
             )
-        body = resp.json()
-        if not body.get("success", True) and not body.get("request_id"):
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        if body.get("success") is False and not body.get("request_id"):
             raise NotSubmitted(f"upload-post refused: {str(body)[:300]}")
         rid = body.get("request_id") or request_id
         if body.get("results"):  # finished synchronously
@@ -104,6 +140,15 @@ class UploadPost:
         return r if r.status != "processing" else None
 
 
+def _as_fields(pairs: list[tuple[str, str]]) -> dict[str, list[str]]:
+    """httpx wants a mapping for multipart fields (a list of tuples is read as raw content);
+    repeated keys such as platform[] become lists."""
+    out: dict[str, list[str]] = {}
+    for k, v in pairs:
+        out.setdefault(k, []).append(v)
+    return out
+
+
 def _parse_results(results: Any) -> dict[str, Result]:
     items: list[tuple[str, dict[str, Any]]] = []
     if isinstance(results, dict):
@@ -113,12 +158,14 @@ def _parse_results(results: Any) -> dict[str, Result]:
     out: dict[str, Result] = {}
     for platform, r in items:
         status = str(r.get("status") or "").lower()
+        msg = str(r.get("message") or "").strip().lower()
         url = r.get("url") or r.get("post_url") or r.get("platform_post_url")
-        rid = r.get("post_id") or r.get("publish_id") or r.get("video_id")
-        if status in ("queued", "processing", "pending", "in_progress", "retryable"):
-            out[platform] = Result("processing")
-        elif status == "skipped":
+        rid = r.get("post_id") or r.get("publish_id") or r.get("video_id") or r.get("video_reel_id")
+        if r.get("skipped") or status == "skipped":
             out[platform] = Result("failed", error=f"skipped: {r.get('skip_reason') or r.get('message')}")
+        elif status in ("queued", "processing", "pending", "in_progress", "retryable") \
+                or (not url and not rid and msg in ("queued", "processing", "pending")):
+            out[platform] = Result("processing")
         elif r.get("success") is True or status == "completed":
             out[platform] = Result("inbox" if r.get("fallback_to_inbox") else "published",
                                    remote_id=str(rid) if rid else None, url=url)
@@ -127,4 +174,3 @@ def _parse_results(results: Any) -> dict[str, Result]:
         else:
             out[platform] = Result("processing")
     return out
-

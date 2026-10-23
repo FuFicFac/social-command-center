@@ -1,6 +1,6 @@
 """TikTok Content Posting API (direct lane).
 
-Reality (checked 2026-10-23, developers.tiktok.com content-sharing guidelines):
+Reality (checked 2026-10-23, developers.tiktok.com content-sharing guidelines + media-transfer guide):
   * Unaudited apps can only post SELF_ONLY (private), max 5 users/day.
   * TikTok lists "a utility tool to help upload contents to the account(s) you or
     your team manages" as NOT acceptable for audit — so a personal app won't get
@@ -18,7 +18,7 @@ from typing import Any
 
 from .. import media, oauth, secrets
 from ..config import Config
-from .base import Logger, NotSubmitted, Result, check, client, commit
+from .base import Ambiguous, Logger, NotSubmitted, Result, check, client, commit, pre
 
 AUTH = "https://www.tiktok.com/v2/auth/authorize/"
 API = "https://open.tiktokapis.com/v2"
@@ -27,7 +27,7 @@ MIN_CHUNK, MAX_CHUNK = 5 * 2**20, 64 * 2**20
 
 def chunk_plan(size: int) -> tuple[int, int]:
     """(chunk_size, total_chunk_count) per TikTok's media transfer rules."""
-    if size <= MAX_CHUNK:
+    if size <= MAX_CHUNK:  # files up to 64 MB go as a single chunk (even under 5 MB)
         return size, 1
     chunk = 10 * 2**20
     return chunk, size // chunk  # final chunk absorbs the remainder (< 2 chunks)
@@ -65,7 +65,7 @@ class TikTok:
             "client_key": key, "response_type": "code", "scope": self._scopes(),
             "redirect_uri": redirect, "code_challenge": challenge,
             "code_challenge_method": "S256",
-        }, port, path="/callback/", host="localhost")
+        }, port, path="/callback/", host="127.0.0.1")  # URL says localhost; bind IPv4 loopback
         with client(30) as http:
             tok = check(http.post(f"{API}/oauth/token/", data={
                 "client_key": key, "client_secret": csec, "code": q["code"],
@@ -73,7 +73,8 @@ class TikTok:
                 "code_verifier": verifier,
             }), "tiktok token exchange")
             if "refresh_token" not in tok:
-                raise RuntimeError(f"TikTok token exchange failed: {tok}")
+                raise RuntimeError("TikTok token exchange failed: "
+                                   f"{tok.get('error_description') or tok.get('error') or 'no refresh token'}")
             secrets.put("tiktok.refresh_token", tok["refresh_token"])
             me = http.get(f"{API}/user/info/", params={"fields": "display_name"},
                           headers={"Authorization": f"Bearer {tok['access_token']}"}).json()
@@ -82,17 +83,55 @@ class TikTok:
     def _access_token(self) -> str:
         if self._token and self._token[1] > time.time() + 60:
             return self._token[0]
-        with client(30) as http:
-            tok = check(http.post(f"{API}/oauth/token/", data={
-                "client_key": self.cfg.get("tiktok", "client_key"),
-                "client_secret": secrets.require("tiktok.client_secret"),
-                "grant_type": "refresh_token",
-                "refresh_token": secrets.require("tiktok.refresh_token"),
-            }), "tiktok token refresh")
-        if tok.get("refresh_token"):
+        try:
+            with client(30) as http:
+                tok = pre(lambda: http.post(f"{API}/oauth/token/", data={
+                    "client_key": self.cfg.get("tiktok", "client_key"),
+                    "client_secret": secrets.require("tiktok.client_secret"),
+                    "grant_type": "refresh_token",
+                    "refresh_token": secrets.require("tiktok.refresh_token"),
+                }), "tiktok token refresh")
+        except secrets.MissingSecret as e:
+            raise NotSubmitted(f"TikTok is not connected ({e}) — run: scc connect tiktok") from e
+        except NotSubmitted as e:
+            raise NotSubmitted(f"TikTok sign-in failed — reconnect with: scc connect tiktok "
+                               f"({e})") from e
+        if not tok.get("access_token"):
+            raise NotSubmitted("TikTok sign-in failed — reconnect with: scc connect tiktok "
+                               f"({tok.get('error_description') or tok.get('error')})")
+        if tok.get("refresh_token"):  # TikTok may rotate it; always keep the newest
             secrets.put("tiktok.refresh_token", tok["refresh_token"])
         self._token = (tok["access_token"], time.time() + int(tok.get("expires_in", 86400)))
         return self._token[0]
+
+    def verify(self, platform: str) -> tuple[bool, str]:
+        try:
+            with client(20) as http:
+                r = http.get(f"{API}/user/info/", params={"fields": "display_name"},
+                             headers={"Authorization": f"Bearer {self._access_token()}"})
+            body = r.json()
+            code = (body.get("error") or {}).get("code", "ok")
+            if r.status_code >= 400 or code != "ok":
+                return False, f"TikTok: {code} {(body.get('error') or {}).get('message', '')}".strip()
+            name = ((body.get("data") or {}).get("user") or {}).get("display_name")
+            return True, f"TikTok account '{name or '?'}'"
+        except Exception as e:
+            return False, str(e) if isinstance(e, NotSubmitted) else e.__class__.__name__
+
+    def _creator_privacy(self, http: Any, auth: dict[str, str]) -> str:
+        """Direct Post must ask TikTok which privacy levels this creator may use."""
+        info = pre(lambda: http.post(f"{API}/post/publish/creator_info/query/", headers=auth),
+                   "tiktok creator info")
+        err = info.get("error") or {}
+        if err.get("code") not in (None, "ok"):
+            raise NotSubmitted(f"tiktok creator info: {err.get('code')} {err.get('message')}")
+        options = (info.get("data") or {}).get("privacy_level_options") or []
+        want = self.cfg.get("tiktok", "privacy_level")
+        if want not in options:
+            raise NotSubmitted(f"tiktok privacy_level {want!r} is not available for this account "
+                               f"(TikTok allows: {', '.join(options) or 'nothing'}). Unaudited "
+                               "apps only get SELF_ONLY.")
+        return want
 
     def publish(self, post: dict[str, Any], platforms: list[str], video: Path,
                 log: Logger) -> dict[str, Result]:
@@ -111,13 +150,15 @@ class TikTok:
                 url = f"{API}/post/publish/video/init/"
                 payload = {"source_info": source, "post_info": {
                     "title": media.copy_for(post, "tiktok")["caption"],
-                    "privacy_level": self.cfg.get("tiktok", "privacy_level"),
+                    "privacy_level": self._creator_privacy(http, auth),
                 }}
-            init = check(http.post(url, headers=auth, json=payload), "tiktok init")
-            err = init.get("error", {})
+            init = pre(lambda: http.post(url, headers=auth, json=payload), "tiktok init")
+            err = init.get("error") or {}
             if err.get("code") not in (None, "ok"):
                 raise NotSubmitted(f"tiktok init: {err.get('code')} {err.get('message')}")
-            data = init["data"]
+            data = init.get("data") or {}
+            if not data.get("upload_url") or not data.get("publish_id"):
+                raise NotSubmitted("tiktok init returned no upload_url/publish_id")
             log("info", f"tiktok: uploading {video.name} in {count} chunk(s)")
             with video.open("rb") as fh:
                 for i in range(count):
@@ -128,11 +169,15 @@ class TikTok:
                     headers = {"Content-Type": "video/mp4", "Content-Length": str(len(body)),
                                "Content-Range": f"bytes {start}-{end}/{size}"}
                     if i == count - 1:  # the final chunk completes the post
-                        commit(lambda h=headers, b=body: http.put(data["upload_url"], headers=h, content=b),
-                               "tiktok upload")
+                        resp = commit(lambda h=headers, b=body: http.put(
+                            data["upload_url"], headers=h, content=b), "tiktok upload")
+                        if resp.status_code not in (200, 201):
+                            raise Ambiguous(f"tiktok upload: unexpected HTTP {resp.status_code} "
+                                            "on the final chunk — check the TikTok app first")
                     else:
-                        check(http.put(data["upload_url"], headers=headers, content=body),
-                              f"tiktok chunk {i + 1}/{count}")
+                        pre(lambda h=headers, b=body: http.put(data["upload_url"], headers=h,
+                                                               content=b),
+                            f"tiktok chunk {i + 1}/{count}")
         caption = media.copy_for(post, "tiktok")["caption"]
         return {"tiktok": Result("processing", remote_id=data["publish_id"],
                                  meta={"inbox": inbox, "caption_to_paste": caption if inbox else None})}

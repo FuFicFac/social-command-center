@@ -25,6 +25,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     # Where each platform's posts go. dryrun = log what would happen, touch nothing.
     "routing": {p: "dryrun" for p in PLATFORMS},
     "general": {"timezone": "America/Los_Angeles", "shorts_folder": str(SHORTS_READY)},
+    # Posting slots (local time, general.timezone) — stored as comma strings in config.toml.
+    "schedule": {"slots": "09:00,17:00", "days": "mon,tue,wed,thu,fri,sat,sun"},
     "youtube": {
         "client_id": "",
         "privacy": "public",
@@ -36,7 +38,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "app_id": "",
         "page_id": "",
         "ig_user_id": "",
-        "graph_version": "v23.0",
+        "graph_version": "v25.0",
         "share_reel_to_feed": True,
     },
     "tiktok": {
@@ -49,6 +51,9 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "upload_post": {"user": "", "facebook_page_id": ""},
 }
+
+
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
 @dataclass
@@ -64,11 +69,24 @@ class Config:
             raise ValueError(f"routing.{platform} = {r!r}; must be one of {ROUTES}")
         return r
 
+    def slots(self) -> list[str]:
+        return _csv(self.get("schedule", "slots"))
+
+    def days(self) -> list[str]:
+        return [d for d in _csv(self.get("schedule", "days")) if d in WEEKDAYS]
+
     def set(self, section: str, key: str, value: Any) -> None:
         self.data.setdefault(section, {})[key] = value
 
 
-def load(path: Path = CONFIG_PATH) -> Config:
+def _csv(value: Any) -> list[str]:
+    if isinstance(value, list | tuple):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return [v.strip() for v in str(value or "").split(",") if v.strip()]
+
+
+def load(path: Path | None = None) -> Config:
+    path = path or CONFIG_PATH  # resolved at call time so tests/tools can repoint it
     merged = {s: dict(v) for s, v in DEFAULTS.items()}
     if path.exists():
         with path.open("rb") as fh:
@@ -87,7 +105,8 @@ def _toml_value(v: Any) -> str:
     return f'"{s}"'
 
 
-def save(cfg: Config, path: Path = CONFIG_PATH) -> None:
+def save(cfg: Config, path: Path | None = None) -> None:
+    path = path or CONFIG_PATH
     lines = [
         "# Social Command Center config. Secrets are NOT stored here (macOS Keychain).",
         "# routing values: direct | upload_post | dryrun",
@@ -98,4 +117,7 @@ def save(cfg: Config, path: Path = CONFIG_PATH) -> None:
         for k, v in values.items():
             lines.append(f"{k} = {_toml_value(v)}")
         lines.append("")
-    path.write_text("\n".join(lines))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".toml.tmp")
+    tmp.write_text("\n".join(lines))
+    tmp.replace(path)  # atomic: a crash mid-write can't leave a half config

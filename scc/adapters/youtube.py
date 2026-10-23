@@ -14,13 +14,25 @@ from typing import Any
 
 from .. import media, oauth, secrets
 from ..config import Config
-from .base import Logger, NotSubmitted, Result, check, client, commit
+from .base import (
+    Ambiguous,
+    Logger,
+    NotSubmitted,
+    Result,
+    check,
+    client,
+    commit,
+    file_body,
+    pre,
+    pre_resp,
+)
 
 AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN = "https://oauth2.googleapis.com/token"
 SCOPES = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly"
 UPLOAD = "https://www.googleapis.com/upload/youtube/v3/videos"
 VIDEOS = "https://www.googleapis.com/youtube/v3/videos"
+CHANNELS = "https://www.googleapis.com/youtube/v3/channels"
 
 
 class YouTube:
@@ -69,15 +81,37 @@ class YouTube:
     def _access_token(self) -> str:
         if self._token and self._token[1] > time.time() + 60:
             return self._token[0]
-        with client(30) as http:
-            tok = check(http.post(TOKEN, data={
-                "client_id": self.cfg.get("youtube", "client_id"),
-                "client_secret": secrets.require("youtube.client_secret"),
-                "refresh_token": secrets.require("youtube.refresh_token"),
-                "grant_type": "refresh_token",
-            }), "google token refresh")
+        try:
+            with client(30) as http:
+                tok = pre(lambda: http.post(TOKEN, data={
+                    "client_id": self.cfg.get("youtube", "client_id"),
+                    "client_secret": secrets.require("youtube.client_secret"),
+                    "refresh_token": secrets.require("youtube.refresh_token"),
+                    "grant_type": "refresh_token",
+                }), "google token refresh")
+        except secrets.MissingSecret as e:
+            raise NotSubmitted(f"YouTube is not connected ({e}) — run: scc connect youtube") from e
+        except NotSubmitted as e:
+            raise NotSubmitted(f"YouTube sign-in failed — reconnect with: scc connect youtube "
+                               f"({e})") from e
+        if not tok.get("access_token"):
+            raise NotSubmitted("YouTube sign-in failed — reconnect with: scc connect youtube")
         self._token = (tok["access_token"], time.time() + int(tok.get("expires_in", 3600)))
         return self._token[0]
+
+    def verify(self, platform: str) -> tuple[bool, str]:
+        try:
+            with client(20) as http:
+                r = http.get(CHANNELS, params={"part": "snippet", "mine": "true"},
+                             headers={"Authorization": f"Bearer {self._access_token()}"})
+            if r.status_code >= 400:
+                return False, f"YouTube API HTTP {r.status_code}: {r.text[:200]}"
+            items = r.json().get("items") or []
+            if not items:
+                return False, "signed in, but this Google account has no YouTube channel"
+            return True, f"channel '{items[0]['snippet']['title']}'"
+        except Exception as e:  # never raise, never leak
+            return False, str(e) if isinstance(e, NotSubmitted) else f"{e.__class__.__name__}"
 
     # ---- publish ----------------------------------------------------------
     def publish(self, post: dict[str, Any], platforms: list[str], video: Path,
@@ -95,22 +129,30 @@ class YouTube:
         size = video.stat().st_size
         auth = {"Authorization": f"Bearer {self._access_token()}"}
         with client() as http:
-            init = http.post(UPLOAD, params={"uploadType": "resumable", "part": "snippet,status"},
-                             headers={**auth, "Content-Type": "application/json; charset=UTF-8",
-                                      "X-Upload-Content-Length": str(size),
-                                      "X-Upload-Content-Type": "video/mp4"},
-                             content=json.dumps(body))
-            check(init, "youtube upload session")
+            init = pre_resp(lambda: http.post(
+                UPLOAD, params={"uploadType": "resumable", "part": "snippet,status"},
+                headers={**auth, "Content-Type": "application/json; charset=UTF-8",
+                         "X-Upload-Content-Length": str(size),
+                         "X-Upload-Content-Type": "video/mp4"},
+                content=json.dumps(body)), "youtube upload session")
             session = init.headers.get("Location")
             if not session:
                 raise NotSubmitted("youtube gave no upload session URL")
             log("info", f"youtube: uploading {video.name} ({size / 2**20:.0f} MB)")
-            with video.open("rb") as fh:
-                resp = commit(lambda: http.put(session, headers={**auth, "Content-Type": "video/mp4",
-                                                                 "Content-Length": str(size)},
-                                               content=fh), "youtube upload")
-        vid = resp.json()
-        vid_id = vid["id"]
+            # The final PUT is the commit. Content-Length is explicit so httpx streams the
+            # file from disk instead of chunk-encoding it.
+            resp = commit(lambda: http.put(session, headers={**auth, "Content-Type": "video/mp4",
+                                                             "Content-Length": str(size)},
+                                           content=file_body(video)), "youtube upload")
+        if resp.status_code not in (200, 201):  # e.g. 308: bytes landed but the video isn't created
+            raise Ambiguous(f"youtube upload: unexpected HTTP {resp.status_code} on final PUT — "
+                            "check YouTube Studio before retrying")
+        try:
+            vid = resp.json()
+            vid_id = vid["id"]
+        except (ValueError, KeyError, TypeError) as e:
+            raise Ambiguous("youtube upload finished but returned no video id — "
+                            "check YouTube Studio before retrying") from e
         privacy = vid.get("status", {}).get("privacyStatus")
         meta = {"privacy": privacy, "upload_status": vid.get("status", {}).get("uploadStatus")}
         wanted = self.cfg.get("youtube", "privacy")
@@ -135,13 +177,17 @@ class YouTube:
         if not items:
             return None
         st = items[0].get("status", {})
+        pd = items[0].get("processingDetails", {})
         meta = {**delivery["meta"], "privacy": st.get("privacyStatus"),
                 "upload_status": st.get("uploadStatus")}
-        if st.get("uploadStatus") in ("rejected", "failed", "deleted"):
+        up = st.get("uploadStatus")
+        if up in ("rejected", "failed", "deleted") or pd.get("processingStatus") in ("failed", "terminated"):
+            why = (st.get("rejectionReason") or st.get("failureReason")
+                   or pd.get("processingFailureReason") or pd.get("processingStatus"))
             return Result("failed", remote_id=vid, url=delivery.get("url"),
-                          error=f"YouTube {st.get('uploadStatus')}: "
-                                f"{st.get('rejectionReason') or st.get('failureReason')}", meta=meta)
-        if st.get("uploadStatus") == "processed":
+                          error=f"YouTube {up}: {why}", meta=meta)
+        if up == "processed":
             locked = st.get("privacyStatus") != self.cfg.get("youtube", "privacy")
-            return Result("private" if locked else "published", remote_id=vid, url=delivery.get("url"), meta=meta)
+            return Result("private" if locked else "published", remote_id=vid,
+                          url=delivery.get("url"), meta=meta)
         return None

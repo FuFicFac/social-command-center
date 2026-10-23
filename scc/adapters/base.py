@@ -8,7 +8,7 @@ A timeout or 5xx *during* the commit raises Ambiguous — a human checks first.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -40,6 +40,8 @@ class Adapter(Protocol):
 
     def readiness(self, platform: str) -> tuple[bool, str]: ...
 
+    def verify(self, platform: str) -> tuple[bool, str]: ...
+
     def publish(self, post: dict[str, Any], platforms: list[str], video: Path,
                 log: Logger) -> dict[str, Result]: ...
 
@@ -57,17 +59,43 @@ def check(resp: httpx.Response, what: str) -> dict[str, Any]:
         return {}
 
 
+def pre_resp(send: Callable[[], httpx.Response], what: str) -> httpx.Response:
+    """A pre-commit request: any transport error or non-2xx means nothing went live."""
+    try:
+        resp = send()
+    except httpx.HTTPError as e:
+        raise NotSubmitted(f"{what}: {e.__class__.__name__} before anything was published") from e
+    check(resp, what)
+    return resp
+
+
+def pre(send: Callable[[], httpx.Response], what: str) -> dict[str, Any]:
+    """Like pre_resp, but returns the parsed JSON body."""
+    return check(pre_resp(send, what), what)
+
+
 def commit(send: Callable[[], httpx.Response], what: str) -> httpx.Response:
     """Run the request that makes a post real, classifying failures safely."""
     try:
         resp = send()
-    except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as e:
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:  # never reached the server
+        raise NotSubmitted(f"{what}: could not connect ({e.__class__.__name__})") from e
+    except httpx.TransportError as e:  # timeout/reset/protocol error after bytes may have left
         raise Ambiguous(f"{what}: connection dropped during publish ({e.__class__.__name__})") from e
     if resp.status_code >= 500:
         raise Ambiguous(f"{what}: HTTP {resp.status_code} during publish {_short(resp)}")
     if resp.status_code >= 400:
         raise NotSubmitted(f"{what}: HTTP {resp.status_code} {_short(resp)}")
     return resp
+
+
+def file_body(path: Path, chunk: int = 1 << 20) -> Iterator[bytes]:
+    """Stream a file in 1 MB pieces. Pair with an explicit Content-Length header:
+    httpx would otherwise iterate a binary file object line by line and send it
+    with chunked transfer-encoding, which upload endpoints often reject."""
+    with path.open("rb") as fh:
+        while block := fh.read(chunk):
+            yield block
 
 
 def _short(resp: httpx.Response) -> str:

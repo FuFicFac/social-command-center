@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 ACTIVE = ("uploading", "processing")
+DONE = ("published", "private", "inbox", "simulated")
 
 
 def now() -> str:
@@ -74,7 +75,29 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     con.execute("PRAGMA foreign_keys = ON")
     con.execute("PRAGMA journal_mode = WAL")
     con.executescript(SCHEMA)
+    _migrate(con)
     return con
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    cols = {r["name"] for r in con.execute("PRAGMA table_info(posts)")}
+    if "duration" not in cols:
+        try:
+            con.execute("ALTER TABLE posts ADD COLUMN duration REAL")
+        except sqlite3.OperationalError:  # another connection added it first
+            pass
+
+
+def bucket(post: dict[str, Any]) -> str:
+    """Dashboard bucket: attention | posting | posted | scheduled | draft (first match wins)."""
+    live = [d["status"] for d in post["deliveries"].values() if d["status"] != "skipped"]
+    if any(s in ("failed", "needs_review") for s in live):
+        return "attention"
+    if any(s in ACTIVE for s in live):
+        return "posting"
+    if live and all(s in DONE for s in live):
+        return "posted"
+    return "scheduled" if post.get("approved_at") else "draft"
 
 
 def log(con: sqlite3.Connection, level: str, message: str, post_id: str | None = None,

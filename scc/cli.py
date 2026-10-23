@@ -7,11 +7,11 @@ import getpass
 import json
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import captions, config, db, engine, media, secrets
+from . import captions, config, db, engine, media, schedule, secrets
 from .adapters import for_route
 from .adapters.meta import Meta
 from .adapters.tiktok import TikTok
@@ -152,9 +152,13 @@ def _add(con, cfg, path: Path, title: str | None, caption: str | None, to: list[
         sys.exit(f"no such file: {path}")
     if con.execute("SELECT 1 FROM posts WHERE video_path=?", (str(path),)).fetchone():
         return None
-    return db.create_post(con, str(path), media.sha256(path),
-                          title or media.title_from_filename(path), caption or "", to,
-                          parse_when(at, cfg))
+    pid = db.create_post(con, str(path), media.sha256(path),
+                         title or media.title_from_filename(path), caption or "", to,
+                         parse_when(at, cfg))
+    dur = media.duration(path)
+    if dur is not None:
+        con.execute("UPDATE posts SET duration=? WHERE id=?", (dur, pid))
+    return pid
 
 
 def cmd_add(a, cfg, con):
@@ -223,12 +227,7 @@ def cmd_edit(a, cfg, con):
 
 
 def preflight_report(post: dict, cfg) -> list[str]:
-    probe = media.probe(post["video_path"])
-    issues = []
-    for p, d in post["deliveries"].items():
-        if d["status"] in ("pending", "failed"):
-            issues += [f"{p}: {x}" for x in media.preflight(post, p, probe)]
-    return issues
+    return media.post_issues(post)
 
 
 def cmd_approve(a, cfg, con):
@@ -321,6 +320,48 @@ def cmd_remove(a, cfg, con):
     print("removed from queue (the video file is untouched)")
 
 
+def cmd_slots(a, cfg, con):
+    taken = schedule.taken_slots(con)
+    now = datetime.now(UTC)
+    n = 0
+    for s in schedule.slots_between(cfg, schedule.local_today(cfg), a.days):
+        if s <= now:
+            continue
+        pid = taken.get(s)
+        print(f"{schedule.slot_label(cfg, s):<22} {pid or 'free'}")
+        n += pid is None
+    print(f"\n{n} free slot(s) in the next {a.days} day(s)  "
+          f"(slots {','.join(cfg.slots())}; days {','.join(cfg.days())})")
+
+
+def cmd_schedule(a, cfg, con):
+    if a.action != "auto":
+        sys.exit("schedule auto ID... [--start YYYY-MM-DD] [--approve] [--dry-run]")
+    ids = [need_post(con, i)["id"] for i in a.ids]
+    start = date.fromisoformat(a.start) if a.start else None
+    assigned, errors = schedule.auto_assign(con, cfg, ids, start, a.approve, a.dry_run)
+    for pid, at in assigned.items():
+        print(f"{pid}  {local(at, cfg)}" + ("  (dry run)" if a.dry_run else ""))
+    for pid, msg in errors.items():
+        print(f"{pid}  ✗ {msg}")
+    if not assigned and not errors:
+        print("nothing to do")
+
+
+def cmd_scheduler(a, cfg, con):
+    import subprocess
+
+    from .jobs import PLIST
+    if a.action == "status":
+        print(f"launchd agent: {'installed' if PLIST.exists() else 'not installed'} ({PLIST})")
+        return
+    script = Path(__file__).resolve().parent.parent / "scripts" / f"{a.action}-scheduler.sh"
+    r = subprocess.run(["sh", str(script)], check=False, capture_output=True, text=True, timeout=30)
+    print((r.stdout + r.stderr).strip())
+    if r.returncode:
+        sys.exit(r.returncode)
+
+
 def cmd_serve(a, cfg, con):
     from .server import serve
     serve(a.port, open_browser=not a.no_open)
@@ -393,6 +434,16 @@ def build() -> argparse.ArgumentParser:
     sp.add_argument("--url")
     sp = add("remove", cmd_remove, "drop a post from the queue")
     sp.add_argument("id")
+    sp = add("slots", cmd_slots, "upcoming posting slots and who holds them")
+    sp.add_argument("--days", type=int, default=14)
+    sp = add("schedule", cmd_schedule, "schedule auto ID... : fill the next free slots")
+    sp.add_argument("action", choices=["auto"])
+    sp.add_argument("ids", nargs="+")
+    sp.add_argument("--start", help="YYYY-MM-DD (local); default today")
+    sp.add_argument("--approve", action="store_true", help="approve too (runs preflight)")
+    sp.add_argument("--dry-run", action="store_true", help="show the plan, save nothing")
+    sp = add("scheduler", cmd_scheduler, "launchd agent: install | uninstall | status")
+    sp.add_argument("action", choices=["install", "uninstall", "status"])
     sp = add("serve", cmd_serve, "open the dashboard")
     sp.add_argument("--port", type=int, default=8787)
     sp.add_argument("--no-open", action="store_true")

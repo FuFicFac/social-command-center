@@ -101,3 +101,50 @@ def preflight(post: dict[str, Any], platform: str, p: Probe) -> list[str]:
     if platform in ("instagram", "tiktok", "facebook") and not c["caption"]:
         problems.append(f"{platform} caption is empty")
     return problems
+
+
+def post_issues(post: dict[str, Any], probe_result: Probe | None = None) -> list[str]:
+    """Everything blocking approval, across the post's live (pending/failed) deliveries."""
+    p = Path(post["video_path"])
+    if not p.exists():
+        return [f"video missing: {p}"]
+    live = [pf for pf, d in post["deliveries"].items() if d["status"] in ("pending", "failed")]
+    if not live:
+        return []
+    try:
+        pr = probe_result or probe(p)
+    except Exception as e:
+        return [f"could not read video: {type(e).__name__}"]
+    return [f"{pf}: {x}" for pf in live for x in preflight(post, pf, pr)]
+
+
+def duration(path: str | Path) -> float | None:
+    """Duration in seconds via ffprobe, or None if unreadable."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
+             "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, timeout=20, check=True).stdout.strip()
+        return round(float(out), 2)
+    except Exception:
+        return None
+
+
+def thumbnail(video: str | Path, out: Path) -> bool:
+    """Write a 360px-wide poster frame (≈1s in; falls back to frame 0 for very short clips)."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(out.name + ".part.jpg")
+    for seek in ("1", "0"):
+        tmp.unlink(missing_ok=True)
+        try:
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-y", "-ss", seek, "-i", str(video), "-frames:v", "1",
+                 "-vf", "scale=360:-2", str(tmp)],
+                capture_output=True, timeout=45, check=True)
+        except (subprocess.SubprocessError, OSError):
+            continue
+        if tmp.exists() and tmp.stat().st_size > 0:
+            tmp.replace(out)
+            return True
+    tmp.unlink(missing_ok=True)
+    return False

@@ -1,68 +1,87 @@
 # Social Command Center
 
-Post one short to **YouTube Shorts, Instagram Reels, Facebook Reels and TikTok** at once — or on a schedule — from a local queue on this Mac.
+Post your shorts to YouTube Shorts, Instagram Reels, Facebook Reels and TikTok, now or weeks ahead, from one dashboard on this Mac.
 
-Built 2026-10-23 from the July 22 spec (`D Second Brain/Builder/Social Command Center Spec.md`). It's the publishing half the spec called for. Just the Good Parts' "Social Command Center" screen stops at a manual handoff; this tool actually posts.
+## Start it
 
-## The flow
+Double-click `OPEN-SOCIAL-COMMAND-CENTER.command`. The dashboard opens at http://127.0.0.1:8787.
 
-```
-Shorts Ready/*.mp4 ──import──▶ draft ──AI captions (Whisper + Claude)──▶ you edit
-      ──approve (+ optional time)──▶ scheduler (every minute) ──▶ each platform's adapter
-      ──▶ live links + status back in the dashboard
-```
+## Your first batch
 
-- **Nothing posts without your approval.** Imports and AI captions are drafts.
-- **Never double-posts.** If an upload dies mid-flight it's flagged *needs review*, never blindly retried.
-- **Changed the video after approving?** It's blocked and un-approved (SHA-256 check).
-- **Secrets live in the macOS Keychain**, never in files or logs.
-- **Every platform starts in `dryrun`**, which shows what *would* post and touches nothing.
+1. **Import new shorts.** They come from `~/Movies/Shorts Ready`.
+2. **Write captions.** Select shorts with the checkboxes (shift-click selects a range), then click ✨ Write captions. Whisper and Claude draft the titles and captions, one at a time.
+3. **Edit.** Skim each draft and fix anything in the editor drawer.
+4. **Auto-schedule.** Click 📅 Auto-schedule… and look at the preview plan. Leave "Approve them so they post automatically" ticked, then confirm.
+5. **Check the Calendar.** Drag posts to rearrange them. Use "+ Add" to fill an open slot. Posts with no time yet wait in the Unscheduled tray.
 
-## Use it
+## Posting rhythm
 
-```bash
-./OPEN-SOCIAL-COMMAND-CENTER.command   # dashboard at http://127.0.0.1:8787
-```
+Settings → Posting schedule sets the times each day and the weekdays. The default is 9:00 AM and 5:00 PM, every day, Pacific time.
 
-or from the CLI (`uv run scc …`):
+## What makes posts actually go out
+
+Each platform has its own route. It can be **Dry run**, **Direct** or **Upload-Post**. Everything starts in Dry run, which shows what would post and sends nothing.
+
+Posts only go out while a scheduler runs. You have two options:
+
+- Keep the dashboard open. It runs the scheduler while the page is open.
+- Install the background scheduler (Settings → Install background scheduler). Posts then go out even when the dashboard is closed.
+
+Either way, the Mac must be awake.
+
+To connect your accounts and switch a platform off Dry run, see [SETUP.md](SETUP.md).
+
+## Safety
+
+- **Approval gate.** Imports and AI captions are drafts. Nothing posts until you approve it.
+- **Never double-posts.** If an upload dies mid-flight, the post is marked *needs review*. It is never retried blindly.
+- **Changed-video guard.** If you change a video after approving it, it is blocked and un-approved (SHA-256 check).
+- **Keychain secrets.** Passwords and tokens live in the macOS Keychain. They never go into files or logs.
+- **Unscheduling is safe.** Unscheduling a post returns it to draft, so it never posts by itself.
+
+## Status meanings
+
+These are the labels you'll see on each post:
+
+| Label | What it means |
+|---|---|
+| Waiting | Approved or scheduled, not sent yet |
+| Uploading… | The file is going up |
+| Processing… | The platform is still working on it |
+| Live | It's posted |
+| Uploaded (private) | It went up, but YouTube locked it to Private |
+| In TikTok inbox — tap Post | It's in your TikTok app. Open the app and tap Post |
+| Dry run | Nothing was sent. This is only a preview |
+| Failed | Nothing went live. It's safe to retry |
+| Check manually | It may have posted. Check the platform, then mark it or retry it |
+
+## Platform limits worth knowing
+
+- **Facebook Reels** must be 3–90 seconds long. The API allows about 30 a day.
+- **Instagram** allows 100 API posts a day.
+- **TikTok** direct inbox mode allows at most 5 pending posts a day.
+- **YouTube** uploads may be locked to Private until your Google project passes the API audit. The dashboard reads back the real privacy setting, so you'll see "Uploaded (private)" when that happens.
+
+## CLI (optional)
+
+Run these from Terminal in the project folder, with the prefix `uv run`. For example: `uv run scc status`.
 
 | Command | What it does |
 |---|---|
-| `scc status` | routes, connection readiness, queue counts |
-| `scc import` | queue every new MP4 in Shorts Ready as a draft |
-| `scc captions [ID]` | AI-draft title + per-platform captions (one, or all uncaptioned drafts) |
-| `scc edit ID --title … --caption … --set tiktok.caption=… --to youtube,tiktok --at "2026-10-24 09:00"` | change copy / targets / time |
-| `scc approve ID [--at TIME]` | approve (runs preflight checks first) |
-| `scc publish ID` | approve + post now (asks you to type `post`) |
-| `scc list` / `scc show ID` | queue / one post with its event log |
-| `scc run` | one scheduler pass (what launchd runs every minute) |
-| `scc retry ID [platforms]` / `scc mark ID platform published --url …` | recover |
-| `scc route upload_post tiktok` | choose where a platform's posts go |
-
-Times are Pacific (`general.timezone`).
-
-## Routes
-
-Each platform is routed independently in `config.toml`:
-
-| Route | Meaning |
-|---|---|
-| `dryrun` | default; logs what would post |
-| `direct` | the platform's own API, free, needs your developer app |
-| `upload_post` | [Upload-Post](https://upload-post.com): one API key, they hold the audited apps; one upload fans out to every platform routed there |
-
-**Recommended:** `direct` for YouTube, Instagram and Facebook (free), and `upload_post` for TikTok. See SETUP.md for why.
-
-## Delivery states
-
-`pending` → `uploading` → `processing` → **`published`**
-
-Other outcomes:
-- `private`: uploaded, but YouTube locked it Private. That's an unaudited API project; flip it in Studio.
-- `inbox`: waiting in your TikTok app. Tap Post.
-- `simulated`: a dry run.
-- `failed`: nothing went live, so it's safe to retry.
-- `needs_review`: it may have posted. Check, then `mark` or `retry`.
+| `scc status` | Show routes, connection readiness and queue counts |
+| `scc import` | Queue every new MP4 in Shorts Ready as a draft |
+| `scc captions [ID]` | Draft captions for one post, or for every uncaptioned draft |
+| `scc list` | Show the queue |
+| `scc show ID` | Show one post and its event log |
+| `scc approve ID [--at TIME]` | Approve a post, optionally with a time (runs checks first) |
+| `scc publish ID` | Approve and post now. It asks you to type `post` |
+| `scc schedule auto ID... [--approve]` | Fill the next free slots with these posts |
+| `scc slots` | Show upcoming slots and which post holds each one |
+| `scc scheduler install` / `uninstall` | Turn the background scheduler on or off |
+| `scc retry ID [platforms]` | Reset a post's platforms to pending |
+| `scc mark ID platform status --url …` | Record a result you checked by hand |
+| `scc route upload_post tiktok` | Choose where a platform's posts go |
+| `scc serve` | Open the dashboard |
 
 ## Dev
 

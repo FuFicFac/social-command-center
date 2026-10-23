@@ -15,6 +15,9 @@ class DryRun:
     def readiness(self, platform: str) -> tuple[bool, str]:
         return True, "dry run — nothing is posted"
 
+    def verify(self, platform: str) -> tuple[bool, str]:
+        return True, "dry run"
+
     def publish(self, post: dict[str, Any], platforms: list[str], video: Path,
                 log: Logger) -> dict[str, Result]:
         out = {}
