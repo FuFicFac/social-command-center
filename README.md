@@ -69,7 +69,7 @@ Run these from Terminal in the project folder, with the prefix `uv run`. For exa
 | Command | What it does |
 |---|---|
 | `scc status` | Show routes, connection readiness and queue counts |
-| `scc import` | Queue every new MP4 in Shorts Ready as a draft |
+| `scc import` | Queue every new MP4 in Big Short Run Videos as a draft |
 | `scc captions [ID]` | Draft captions for one post, or for every uncaptioned draft |
 | `scc list` | Show the queue |
 | `scc show ID` | Show one post and its event log |

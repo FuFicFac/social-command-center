@@ -27,7 +27,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from . import config, db, jobs, media, schedule
 from . import secrets as keychain
 from .adapters import for_route
-from .cli import _add, parse_when
+from .cli import import_folder, parse_when
 
 STATIC = Path(__file__).parent / "static"
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -787,9 +787,14 @@ class Handler(BaseHTTPRequestHandler):
             folder = Path(cfg.get("general", "shorts_folder")).expanduser()
             if not folder.is_dir():
                 raise Fail(f"shorts folder not found: {folder}")
-            n = sum(1 for f in sorted(folder.glob("*.mp4"))
-                    if _add(con, cfg, f, None, None, list(config.PLATFORMS), None))
-            return {"ok": True, "imported": n}
+            r = import_folder(con, cfg, folder, list(config.PLATFORMS))
+            for pid in r["added"] if cfg.get("general", "auto_captions") else []:
+                # new shorts get AI caption drafts automatically
+                try:
+                    jobs.enqueue_captions(pid)
+                except ValueError:
+                    pass
+            return {"ok": True, "imported": len(r["added"]), "updated": len(r["updated"])}
         if path == "/api/run":
             try:
                 jobs.background("_scheduler", "running scheduler", jobs.publish_job)

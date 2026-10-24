@@ -24,7 +24,8 @@ SHORTS_READY = Path("~/Movies/Shorts Ready")
 DEFAULTS: dict[str, dict[str, Any]] = {
     # Where each platform's posts go. dryrun = log what would happen, touch nothing.
     "routing": {p: "dryrun" for p in PLATFORMS},
-    "general": {"timezone": "America/Los_Angeles", "shorts_folder": str(SHORTS_READY)},
+    "general": {"timezone": "America/Los_Angeles", "shorts_folder": str(SHORTS_READY),
+                "auto_captions": True},
     # Posting slots (local time, general.timezone) — stored as comma strings in config.toml.
     "schedule": {"slots": "09:00,17:00", "days": "mon,tue,wed,thu,fri,sat,sun"},
     "youtube": {

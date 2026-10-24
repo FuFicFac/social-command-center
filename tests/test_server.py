@@ -57,6 +57,7 @@ def app(tmp_path, monkeypatch):
     shorts = tmp_path / "shorts"
     shorts.mkdir()
     monkeypatch.setitem(config.DEFAULTS["general"], "shorts_folder", str(shorts))
+    monkeypatch.setitem(config.DEFAULTS["general"], "auto_captions", False)
     store: dict[str, str] = {}
     monkeypatch.setattr(keychain, "get", store.get)
     monkeypatch.setattr(keychain, "put", store.__setitem__)
@@ -508,3 +509,22 @@ def test_duplicates_use_transcripts_then_slugs(tmp_path, monkeypatch):
     assert d["1"] == ["2"] and d["2"] == ["1"]
     assert d["3"] == []
     assert d["4"] == ["5"]
+
+
+def test_import_swaps_in_newer_cut_and_adds_new(app, tmp_path):
+    import shutil
+    add_video(app, "p__short-1-alpha")
+    import_all(app)
+    old = next(iter(posts(app).values()))
+    newer = tmp_path / "newer"
+    newer.mkdir()
+    shutil.copy(old["video_path"], newer / old["filename"])
+    with open(newer / old["filename"], "ab") as fh:
+        fh.write(b"\0")  # different bytes = a re-edit
+    shutil.copy(old["video_path"], newer / "q__s1-brand-new.mp4")
+    app.post("/api/settings", {"shorts_folder": str(newer)})
+    code, body, _ = app.post("/api/import")
+    assert code == 200 and body["imported"] == 1 and body["updated"] == 1
+    after = {p["id"]: p for p in posts(app).values()}[old["id"]]
+    assert after["video_path"].startswith(str(newer.resolve()))
+    assert after["title"] == old["title"] and after["approved_at"] is None

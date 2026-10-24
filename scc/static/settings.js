@@ -269,7 +269,7 @@ export function createSettings(section) {
     schedState, h("div", { class: "form-actions" }, inst, uninst)));
 
   // ───────── folder ─────────
-  const folder = text("/path/to/Shorts Ready", cur.shorts_folder || "");
+  const folder = text("/path/to/Big Short Run Videos", cur.shorts_folder || "");
   const saveFolder = h("button", { class: "btn", type: "button" }, "Save folder");
   saveFolder.addEventListener("click", act(saveFolder, async () => { await apiPost("/api/settings", { shorts_folder: folder.value.trim() }); toast("Shorts folder saved.", { kind: "success" }); await refreshState(); }));
   root.append(h("section", { class: "card" }, h("h2", null, "Shorts folder"), field("Where your finished vertical MP4s live", folder, "“Import new shorts” in the Library reads from here."), h("div", { class: "form-actions" }, saveFolder)));

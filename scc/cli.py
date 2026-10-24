@@ -171,13 +171,47 @@ def cmd_add(a, cfg, con):
     print("\nDraft saved. Review it, then: scc approve", pid)
 
 
+LOCKED = ("uploading", "processing", "published", "private", "inbox")
+
+
+def import_folder(con, cfg, folder: Path, to: list[str]) -> dict[str, list[str]]:
+    """Add new MP4s as drafts. A file whose name matches a not-yet-posted short that lives
+    elsewhere is treated as a newer cut: the post is repointed to it (copy kept, approval
+    cleared). Posted or in-flight shorts are never touched."""
+    by_name: dict[str, list[dict]] = {}
+    for post in db.list_posts(con):
+        by_name.setdefault(Path(post["video_path"]).name, []).append(post)
+    added, updated = [], []
+    for f in sorted(folder.glob("*.mp4")):
+        f = f.resolve()
+        olds = [p for p in by_name.get(f.name, []) if p["video_path"] != str(f)]
+        if con.execute("SELECT 1 FROM posts WHERE video_path=?", (str(f),)).fetchone():
+            continue
+        movable = [p for p in olds
+                   if not any(d["status"] in LOCKED for d in p["deliveries"].values())]
+        if movable:
+            post = movable[0]
+            sha = media.sha256(f)
+            if sha != post["sha256"]:
+                db.update_post(con, post["id"], video_path=str(f), sha256=sha,
+                               duration=media.duration(f), approved_at=None)
+                db.log(con, "info", f"swapped in newer cut from {folder.name}/ — re-approve when ready",
+                       post["id"])
+            else:
+                db.update_post(con, post["id"], video_path=str(f))
+            updated.append(post["id"])
+            continue
+        pid = _add(con, cfg, f, None, None, to, None)
+        if pid:
+            added.append(pid)
+    return {"added": added, "updated": updated}
+
+
 def cmd_import(a, cfg, con):
     folder = Path(a.folder or cfg.get("general", "shorts_folder"))
-    added = 0
-    for f in sorted(folder.glob("*.mp4")):
-        if _add(con, cfg, f, None, None, platforms_arg(a.to), None):
-            added += 1
-    print(f"imported {added} new short(s) from {folder} as drafts")
+    r = import_folder(con, cfg, folder, platforms_arg(a.to))
+    print(f"imported {len(r['added'])} new short(s) and swapped in {len(r['updated'])} newer "
+          f"cut(s) from {folder}")
 
 
 def _caption_one(con, pid: str) -> None:

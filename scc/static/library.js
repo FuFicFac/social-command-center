@@ -44,7 +44,11 @@ export function createLibrary() {
     importBtn.disabled = true;
     try {
       const r = await apiPost("/api/import", {});
-      toast(r.imported ? `Imported ${plural(r.imported, "new short")} as drafts.` : "No new shorts found in your Shorts folder.", { kind: r.imported ? "success" : "info" });
+      const folder = store.state?.settings?.shorts_folder || "your Shorts folder";
+      const bits = [];
+      if (r.imported) bits.push(`Imported ${plural(r.imported, "new short")} (writing captions now)`);
+      if (r.updated) bits.push(`swapped in ${plural(r.updated, "newer cut")}`);
+      toast(bits.length ? bits.join(" · ") + "." : `No new shorts in ${folder}.`, { kind: bits.length ? "success" : "info" });
       refreshState();
     } catch (e) { toast(errText(e), { kind: "error" }); } finally { importBtn.disabled = false; }
   }
