@@ -320,6 +320,8 @@ def op_retry(con, pid: str, body: dict[str, Any]) -> None:
     chosen = [p for p in plats if p in post["deliveries"]]
     if any(post["deliveries"][p]["status"] in db.ACTIVE for p in chosen):
         raise Fail("still in flight — wait for it to settle", 409)
+    if any(db.retry_blocked(post["deliveries"][p]) for p in chosen):
+        raise Fail("This destination has an upload receipt or needs a history check.", 409)
     for p in chosen:
         db.update_delivery(con, pid, p, status="pending", error=None, attempts=0,
                            remote_id=None, url=None, meta={})
@@ -848,6 +850,28 @@ class Handler(BaseHTTPRequestHandler):
         if action == "captions":
             op_captions(con, pid)
             return {"ok": True}
+        if action == "history":
+            platform = body.get("platform")
+            delivery = need_post(con,pid)["deliveries"].get(platform)
+            if not delivery or not delivery["meta"].get("history_unverified") or delivery["status"] != "pending":
+                raise Fail("This destination is not waiting for a history check.", 409)
+            decision = body.get("decision")
+            meta = {**delivery["meta"], "history_unverified":False, "history_checked_at":db.now()}
+            if decision == "existing":
+                # The operator confirmed a previous upload. Its original visibility may be unknown.
+                url = str(body.get("url") or "").strip()
+                if url and not url.startswith("https://"):
+                    raise Fail("Use the original HTTPS post link.")
+                meta["previously_uploaded"] = True
+                with con:
+                    db.update_delivery(con, pid, platform, status="skipped", route="external",
+                                       url=url or None, error="Previously uploaded to this account.", meta=meta)
+            elif decision == "absent":
+                db.update_delivery(con, pid, platform, error=None, meta=meta)
+            else:
+                raise Fail("Choose an existing upload or confirm the account was checked.")
+            db.log(con, "info", f"Account history checked: {decision}", pid, platform)
+            return {"ok":True}
         if action == "retry":
             op_retry(con, pid, body)
             return {"ok": True, "post": post_view()}

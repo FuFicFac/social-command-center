@@ -318,7 +318,11 @@ class Studio:
 
 
 def stage(source, title, caption, channel, checkpoint):
+    from . import config
     from .media import probe
+
+    if config.load().get("youtube", "uploads_paused"):
+        raise RuntimeError("YouTube uploads are paused")
 
     info = probe(source)
     if info.vertical and info.duration <= 180:

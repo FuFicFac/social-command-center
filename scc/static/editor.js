@@ -261,6 +261,15 @@ function patchStatus() {
             try { await apiPost(`/api/posts/${post.id}/retry`, { platforms: [pl] }); toast(`${PLAT[pl].name} will be tried again.`, { kind: "success" }); refreshState(); }
             catch (e) { toast(errText(e), { kind: "error" }); }
           } }, "Retry") : null),
+        d.meta?.history_unverified && d.status === "pending" ? h("div", {class:"deliv-note"},
+          h("span", null, "Previous uploads on this account have not been checked. "),
+          ...[["existing","Already uploaded"],["absent","Checked account · no match"]].map(([decision,label]) =>
+            h("button", {type:"button",class:"btn sm",onclick:async () => {
+              const url = decision === "existing" ? window.prompt("Original post link, if available", "") : "";
+              if (url === null) return;
+              try {await apiPost(`/api/posts/${post.id}/history`, {platform:pl,decision,url});await refreshState();}
+              catch(e) {toast(errText(e),{kind:"error"});}
+            }},label))) : null,
         d.error ? h("div", { class: "deliv-err" }, d.error) : null,
         note ? h("div", { class: "deliv-note" }, note) : null);
     });

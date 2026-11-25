@@ -186,3 +186,31 @@ def test_upload_post_result_parsing():
     assert r["tiktok"].status == "published" and r["tiktok"].url == "https://t/1"
     assert r["instagram"].status == "processing"
     assert r["facebook"].status == "failed" and "token" in r["facebook"].error
+
+
+def test_receipt_survives_deletion_and_blocks_renamed_duplicate_on_same_platform(env, monkeypatch):
+    con, cfg, source = env
+    first = make_post(con, source)
+    db.update_delivery(con, first, "youtube", status="private", remote_id="original",
+                       url="https://youtube.com/watch?v=original")
+    con.execute("DELETE FROM posts WHERE id=?", (first,))
+    renamed = source.with_name("changed title.mp4")
+    source.rename(renamed)
+    second = make_post(con, renamed, to=["youtube", "instagram"])
+    fake = Fake("published")
+    use(monkeypatch, fake)
+    engine.publish_post(con, cfg, db.get_post(con, second))
+    assert fake.calls == [["instagram"]]
+    assert db.get_post(con, second)["deliveries"]["youtube"]["status"] == "skipped"
+
+
+def test_youtube_pause_and_unverified_external_history_do_not_dispatch(env, monkeypatch):
+    con, cfg, source = env
+    cfg.set("youtube", "uploads_paused", True)
+    pid = make_post(con, source, to=["youtube", "facebook"])
+    db.update_delivery(con, pid, "facebook", meta={"history_unverified": True})
+    fake = Fake("published")
+    use(monkeypatch, fake)
+    engine.publish_post(con, cfg, db.get_post(con, pid))
+    assert fake.calls == []
+    assert all(d["attempts"] == 0 for d in db.get_post(con, pid)["deliveries"].values())

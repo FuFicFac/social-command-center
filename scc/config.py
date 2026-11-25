@@ -29,6 +29,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     # Posting slots (local time, general.timezone) — stored as comma strings in config.toml.
     "schedule": {"slots": "09:00,17:00", "days": "mon,tue,wed,thu,fri,sat,sun"},
     "youtube": {
+        "uploads_paused": False,
         "client_id": "",
         "privacy": "public",
         "category_id": "28",

@@ -114,3 +114,19 @@ def test_main_never_enters_social_dispatch_or_retries_ambiguous_upload(intake, m
         fini.tick(*intake, now=t, make_package=packaging, stage_main=fail_after_submission)
     assert len(transactions) == 1 and not db.list_posts(con)
     assert con.execute("select phase from fini_items").fetchone()[0] == "studio_review"
+
+
+def test_youtube_pause_keeps_long_form_local(intake, monkeypatch):
+    con, folder, _state, cfg = intake
+    cfg.set("youtube", "uploads_paused", True)
+    fini.tick(*intake, now=0)
+    (folder / "main.mp4").write_bytes(b"episode")
+    monkeypatch.setattr(media, "probe", lambda p: media.Probe(420, 1920, 1080, 7, "h264", True))
+    for t in (1, 92, 93, 900):
+        fini.tick(
+            *intake,
+            now=t,
+            make_package=packaging,
+            stage_main=lambda *_: pytest.fail("Paused uploader ran"),
+        )
+    assert con.execute("SELECT phase FROM fini_items").fetchone()[0] == "youtube_paused"

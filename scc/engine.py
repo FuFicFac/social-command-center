@@ -79,6 +79,23 @@ def publish_post(con: sqlite3.Connection, cfg: config.Config, post: dict[str, An
     targets = sendable(post)
     if platforms is not None:
         targets = [p for p in targets if p in platforms]
+    for platform in targets.copy():
+        delivery = post["deliveries"][platform]
+        reason = None
+        prior = con.execute("SELECT status,url FROM upload_receipts WHERE sha256=? AND platform=?",
+                            (post.get("sha256"), platform)).fetchone()
+        if prior:
+            reason = f"Existing {platform} upload recorded ({prior['status']})."
+            db.update_delivery(con, post["id"], platform, status="skipped", error=reason,
+                               url=prior["url"] or delivery["url"])
+        elif platform == "youtube" and cfg.get("youtube", "uploads_paused"):
+            reason = "YouTube uploads are paused."
+        elif delivery["meta"].get("history_unverified"):
+            reason = "Check this account's posting history before delivery."
+        if reason:
+            if not prior and delivery["error"] != reason:
+                db.update_delivery(con, post["id"], platform, error=reason)
+            targets.remove(platform)
     if not targets:
         return
     if not video.exists():

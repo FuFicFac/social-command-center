@@ -143,6 +143,10 @@ Open **Shorts inventory** to review existing exports and their YouTube receipts.
 
 New vertical renders up to three minutes enter the Command Center with copy for YouTube, Instagram, Facebook and TikTok. The default release setting requires approval. The opt-in setting `fini.auto_approve_new_shorts` applies only to future folder drops. A new Short waits for a real route on each platform. The existing library and individually chosen archive files stay under manual control.
 
+The local `youtube.uploads_paused` setting excludes YouTube from new Shorts and holds long-form metadata locally. It also blocks YouTube on every Command Center delivery route. A held long-form package remains available for individual review when uploading resumes.
+
+For a destination with unverified posting history, the editor offers **Already uploaded** and **Checked account · no match**. An existing upload can include its original link. Checking history preserves the post’s normal approval setting. Confirmed uploads are recorded by file hash and platform in `upload_receipts`, independently of the editable queue, so removing a queue entry or renaming the exact file preserves its history. Re-encoded or recut videos may require audio or transcript comparison.
+
 The main Upload-Post profile is the Why AI Matters destination. For a separate A-List profile, use `scc config fini.alist_upload_post_user PROFILE`. A-List deliveries wait until their own destination is configured. Use **Connections & Settings** to save the API key in Keychain, verify the profile, and choose each platform's route. Use the local editor to preview and approve posts.
 
 Long-form renders use private YouTube Studio staging after transcript-based channel selection. Chrome must be signed in with the intended channel available. The Mac must be awake and its graphical session available for Studio interaction. An interrupted transfer is held with the available receipt. The user can add the thumbnail in Studio. The destination never receives an automatic public release from this long-form uploader.

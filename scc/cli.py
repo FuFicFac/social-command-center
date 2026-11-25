@@ -333,6 +333,9 @@ def cmd_daemon(a, cfg, con):
 def cmd_retry(a, cfg, con):
     post = need_post(con, a.id)
     for p in platforms_arg(a.platforms):
+        if p in post["deliveries"] and db.retry_blocked(post["deliveries"][p]):
+            print(f"{p}: preserved upload receipt or history hold")
+            continue
         if p in post["deliveries"] and post["deliveries"][p]["status"] not in ("skipped",):
             db.update_delivery(con, post["id"], p, status="pending", error=None, attempts=0,
                                remote_id=None, url=None, meta={})

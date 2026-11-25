@@ -256,9 +256,14 @@ def handoff(con, row, cfg, state, stage_main=stage):
                     data["title"],
                     data["description"],
                     ["instagram", "facebook", "tiktok"]
-                    if row["origin"] == "inventory"
+                    if row["origin"] == "inventory" or cfg.get("youtube", "uploads_paused")
                     else list(config.PLATFORMS),
                 )
+                if row["origin"] == "inventory" or con.execute(
+                    "SELECT 1 FROM shorts_inventory WHERE hash=?", (row["hash"],)
+                ).fetchone():
+                    for platform in ("instagram", "facebook", "tiktok"):
+                        db.update_delivery(con, pid, platform, meta={"history_unverified": True})
                 fields = {
                     "overrides": {
                         p: {"caption": data[p]} for p in ("instagram", "facebook", "tiktok")
@@ -277,6 +282,9 @@ def handoff(con, row, cfg, state, stage_main=stage):
         return
     if row["kind"] != "long":
         raise ValueError("Unrecognized intake format")
+    if cfg.get("youtube", "uploads_paused"):
+        patch(con, row["id"], phase="youtube_paused", message="Packaged locally. YouTube uploads are paused.")
+        return
     with (state / "studio.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         receipt = {}
