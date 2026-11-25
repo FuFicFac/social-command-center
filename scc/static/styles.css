@@ -376,3 +376,6 @@ dialog.modal::backdrop { background: rgba(10,12,16,.5); }
 .week .cchip:not(.compact) .cchip-thumb { grid-row: 1; grid-column: 1; }
 .week .cchip:not(.compact) .pdots { grid-row: 1; grid-column: 2; flex-wrap: wrap; align-self: start; width: 30px; gap: 4px; padding-top: 2px; }
 .week .cchip:not(.compact) .cchip-title { grid-row: 2; grid-column: 1 / -1; -webkit-line-clamp: 2; }
+
+.inventory-list { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,21rem),1fr)); gap: 1rem; }
+.inventory-item { display: grid; align-content: start; justify-items: start; gap: .5rem; padding: 1rem; border: 1px solid var(--line, #7776); border-radius: .6rem; overflow-wrap: anywhere; }

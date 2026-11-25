@@ -50,6 +50,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "privacy_level": "SELF_ONLY",
         "redirect_port": 8790,
     },
+    "fini": {"auto_approve_new_shorts": False, "alist_upload_post_user": ""},
     "upload_post": {"user": "", "facebook_page_id": ""},
 }
 

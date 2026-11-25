@@ -658,6 +658,13 @@ class Handler(BaseHTTPRequestHandler):
                 html = (STATIC / "index.html").read_text().replace("__SCC_TOKEN__", TOKEN)
                 return self._bytes(html.encode(), "text/html; charset=utf-8",
                                    extra={"Content-Security-Policy": CSP})
+            if path == "/api/shorts-inventory":
+                from .inventory import listing
+                con = db.connect()
+                try:
+                    return self._json({"items": listing(con)})
+                finally:
+                    con.close()
             if path == "/api/state":
                 return self._json(state())
             if path == "/api/slots":
@@ -783,6 +790,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route_data(self, con, path: str, body: dict[str, Any]) -> dict[str, Any] | None:
         cfg = config.load()
+        if m := re.fullmatch(r"/api/shorts-inventory/([a-f0-9]{64})/prepare", path):
+            from .inventory import prepare_for_social
+            return prepare_for_social(con, m.group(1))
         if path == "/api/import":
             folder = Path(cfg.get("general", "shorts_folder")).expanduser()
             if not folder.is_dir():

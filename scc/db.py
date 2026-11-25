@@ -22,6 +22,19 @@ from typing import Any
 from . import config
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS fini_items (
+    id INTEGER PRIMARY KEY, path TEXT NOT NULL, stamp TEXT NOT NULL,
+    observed REAL NOT NULL, phase TEXT NOT NULL DEFAULT 'settling', hash TEXT,
+    kind TEXT, brand TEXT, package TEXT, post_id TEXT, receipt TEXT,
+    origin TEXT NOT NULL DEFAULT 'drop', retry_after REAL NOT NULL DEFAULT 0,
+    message TEXT, UNIQUE(path,stamp)
+);
+CREATE INDEX IF NOT EXISTS fini_hash ON fini_items(hash);
+CREATE INDEX IF NOT EXISTS fini_post ON fini_items(post_id);
+CREATE TABLE IF NOT EXISTS shorts_inventory (
+    hash TEXT NOT NULL, path TEXT NOT NULL UNIQUE, seconds REAL NOT NULL, dimensions TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS inventory_hash ON shorts_inventory(hash);
 CREATE TABLE IF NOT EXISTS posts (
     id            TEXT PRIMARY KEY,
     video_path    TEXT NOT NULL,

@@ -134,3 +134,17 @@ scripts/uninstall-scheduler.sh   # turn it off
 ```
 
 Without the background scheduler, posts go out only while the dashboard is open, or when you click **Run scheduler** or **Post now**, or run `scc run`.
+
+## Fini Vids and the Shorts inventory
+
+Run `.venv/bin/python scripts/install-intake.py` on the Mac to install the dashboard and folder watcher as per-user launch agents. The watcher checks the mounted Fini Vids folder every minute after login. A new render must stay unchanged across checks for at least 90 seconds. Existing files are recorded on first installation. A renamed file or identical copy is matched by file identity or content. Local Whisper, FFmpeg and the signed-in Codex CLI prepare the metadata. The desktop Codex app can be closed.
+
+Open **Shorts inventory** to review existing exports and their YouTube receipts. **Prepare for Instagram, Facebook and TikTok** creates an unapproved local draft from the selected item. Multiple paths for identical media share one entry. Some inventory entries are previews or alternate cuts.
+
+New vertical renders up to three minutes enter the Command Center with copy for YouTube, Instagram, Facebook and TikTok. The default release setting requires approval. The opt-in setting `fini.auto_approve_new_shorts` applies only to future folder drops. A new Short waits for a real route on each platform. The existing library and individually chosen archive files stay under manual control.
+
+The main Upload-Post profile is the Why AI Matters destination. For a separate A-List profile, use `scc config fini.alist_upload_post_user PROFILE`. A-List deliveries wait until their own destination is configured. Use **Connections & Settings** to save the API key in Keychain, verify the profile, and choose each platform's route. Use the local editor to preview and approve posts.
+
+Long-form renders use private YouTube Studio staging after transcript-based channel selection. Chrome must be signed in with the intended channel available. The Mac must be awake and its graphical session available for Studio interaction. An interrupted transfer is held with the available receipt. The user can add the thumbnail in Studio. The destination never receives an automatic public release from this long-form uploader.
+
+The local intake ledger is the `fini_items` table in `data/scc.sqlite3`. Its `phase`, `message` and `receipt` columns distinguish pending preparation, private Studio staging, review and delivered Shorts drafts. The system log for intake is `~/Library/Logs/com.creator.fini-intake.log`.

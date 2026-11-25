@@ -4,12 +4,13 @@ import {
   h, $, $$, icon, store, onState, startPolling, S, posts, postById, titleOf, ORDER, PLAT, ROUTE_LABEL, relTime, go, pref, confirmModal, plural,
 } from "./core.js";
 import { createLibrary } from "./library.js";
+import { createInventory } from "./inventory.js";
 import { createCalendar } from "./calendar.js";
 import { createActivity } from "./activity.js";
 import { createSettings } from "./settings.js";
 import { initEditor, openEditor, closeEditor, updateEditor, editorDirty, editorId } from "./editor.js";
 
-const VIEWS = { library: createLibrary, calendar: createCalendar, activity: createActivity, settings: createSettings };
+const VIEWS = { inventory: createInventory, library: createLibrary, calendar: createCalendar, activity: createActivity, settings: createSettings };
 let lastView = "library", current = null, currentName = null, booted = false, accepted = "", suppress = false;
 
 function parse(hash) {

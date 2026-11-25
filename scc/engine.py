@@ -5,6 +5,7 @@ Safe to run every minute from launchd; a file lock stops overlapping runs.
 
 from __future__ import annotations
 
+import copy
 import fcntl
 import sqlite3
 from collections import defaultdict
@@ -92,6 +93,12 @@ def publish_post(con: sqlite3.Connection, cfg: config.Config, post: dict[str, An
         return
     probe = media.probe(video)
 
+    intake = con.execute("SELECT brand FROM fini_items WHERE post_id=? AND phase='queued'",
+                         (post["id"],)).fetchone()
+    if intake and intake["brand"] == "alist":
+        cfg = config.Config(copy.deepcopy(cfg.data))
+        cfg.set("upload_post", "user", cfg.get("fini", "alist_upload_post_user"))
+        cfg.set("upload_post", "facebook_page_id", "")
     groups: dict[tuple[str, int], list[str]] = defaultdict(list)
     for p in targets:
         problems = media.preflight(post, p, probe)
@@ -99,6 +106,12 @@ def publish_post(con: sqlite3.Connection, cfg: config.Config, post: dict[str, An
             _apply(con, post["id"], p, Result("failed", error="; ".join(problems)))
             continue
         route = cfg.route(p)
+        if intake and (route == "dryrun" or (intake["brand"] == "alist" and route == "direct")):
+            msg = ("Choose a live route in Connections & Settings" if route == "dryrun"
+                   else "Select Upload-Post and the A-List profile to deliver to this brand")
+            if post["deliveries"][p]["error"] != msg:
+                db.update_delivery(con, post["id"], p, error=msg)
+            continue
         adapter = for_route(cfg, p, route)
         ok, why = adapter.readiness(p)
         if not ok:  # stay pending; it goes out on the first run after you connect

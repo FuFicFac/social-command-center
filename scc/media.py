@@ -32,10 +32,13 @@ def probe(path: str | Path) -> Probe:
     ).stdout
     info = json.loads(out)
     v = next((s for s in info["streams"] if s.get("codec_type") == "video"), {})
+    width, height = int(v.get("width", 0)), int(v.get("height", 0))
+    if any(int(side.get("rotation", 0)) % 180 for side in v.get("side_data_list", [])):
+        width, height = height, width
     return Probe(
         duration=float(info["format"].get("duration", 0)),
-        width=int(v.get("width", 0)),
-        height=int(v.get("height", 0)),
+        width=width,
+        height=height,
         size=Path(path).stat().st_size,
         vcodec=v.get("codec_name", ""),
         has_audio=any(s.get("codec_type") == "audio" for s in info["streams"]),
