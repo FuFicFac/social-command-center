@@ -154,7 +154,52 @@ def test_state_shape_and_import(app):
             "deliveries"} <= set(p)
     assert p["bucket"] == "draft" and p["title"] == "Alpha"
     assert 4 < p["duration"] < 6
-    assert set(p["deliveries"]) == {"youtube", "instagram", "facebook", "tiktok"}
+    assert set(p["deliveries"]) == set(config.PLATFORMS)
+    assert {pl for pl, d in p["deliveries"].items() if d["status"] == "pending"} == set(config.DEFAULT_TARGETS)
+
+
+def test_add_linkedin_and_x_to_approved_draft(app):
+    add_video(app, "draft")
+    import_all(app)
+    pid = posts(app)["draft.mp4"]["id"]
+    path = f"/api/posts/{pid}"
+    app.post(path, {"caption": "Default", "targets": ["instagram"]})
+    assert app.post(path + "/approve")[0] == 200
+    copies = {"linkedin": {"caption": "A practical example"}, "x": {"caption": "Try this"}}
+    assert app.post(path, {"targets": ["instagram", "linkedin", "x"]})[1]["unapproved"]
+    result = app.post(path, {"overrides": copies})[1]["post"]
+    assert not result["approved_at"] and result["overrides"] == copies
+    assert all(result["deliveries"][p]["meta"]["history_unverified"] for p in copies)
+    for p in copies:
+        assert set(state(app)["platforms"][p]["configured"]) == {"upload_post"}
+        assert app.post("/api/settings", {"routing": {p: "direct"}})[0] == 400
+        assert app.post("/api/settings", {"routing": {p: "upload_post"}})[0] == 200
+        assert app.post("/api/disconnect", {"platform": p, "route": "direct"})[0] == 400
+
+
+def test_original_request_must_be_reconciled_before_retry(app):
+    add_video(app, "review")
+    import_all(app)
+    pid = posts(app)["review.mp4"]["id"]
+    path = f"/api/posts/{pid}"
+    app.post(path, {"targets": ["linkedin", "x"]})
+    con = db.connect()
+    db.update_post(con, pid, approved_at=db.now())
+    for pl in ("linkedin", "x"):
+        db.update_delivery(con, pid, pl, status="processing", route="upload_post",
+                           meta={"request_id": "original-request"})
+    db.update_delivery(con, pid, "linkedin", status="published", remote_id="successful-post")
+    db.update_delivery(con, pid, "x", status="failed", error="Provider failed")
+    assert app.post(path + "/retry", {"platforms": ["x"]})[0] == 409
+    assert app.post(path + "/history", {"platform": "x", "decision": "absent"})[0] == 200
+    post = db.get_post(con, pid)
+    assert not post["approved_at"] and post["deliveries"]["x"]["status"] == "pending"
+    assert post["deliveries"]["linkedin"]["status"] == "published"
+    assert [tuple(row) for row in con.execute("SELECT platform, remote_id FROM upload_receipts")] == [
+        ("linkedin", "successful-post")]
+    db.update_delivery(con, pid, "linkedin", status="needs_review")
+    assert app.post(path + "/history", {"platform": "linkedin", "decision": "absent"})[0] == 409
+    con.close()
 
 
 def test_duplicates_and_targets(app):
@@ -407,7 +452,7 @@ def test_connect_job_states(app, monkeypatch):
 
     def fake_connect(self, port=8789):
         gate.wait(5)
-        return "My Channel"
+        return {"id": "UCtest", "title": "My Channel", "handle": "@mychannel"}
 
     monkeypatch.setattr(YouTube, "connect", fake_connect)
     assert app.post("/api/connect/youtube/start")[0] == 200
@@ -445,6 +490,8 @@ def test_scheduler_pass_skips_future_and_posts_due(app):
     import_all(app)
     pid = next(iter(posts(app).values()))["id"]
     app.post(f"/api/posts/{pid}", {"caption": "cap #ai"})
+    for pl in config.DEFAULT_TARGETS:
+        assert app.post(f"/api/posts/{pid}/history", {"platform": pl, "decision": "absent"})[0] == 200
     future = (datetime.now(UTC) + timedelta(days=2)).isoformat()
     app.post(f"/api/posts/{pid}", {"scheduled_at": future})
     app.post(f"/api/posts/{pid}/approve")
@@ -463,6 +510,8 @@ def test_publish_now_and_remove_guard(app):
     import_all(app)
     pid = next(iter(posts(app).values()))["id"]
     app.post(f"/api/posts/{pid}", {"caption": "cap #ai"})
+    for pl in config.DEFAULT_TARGETS:
+        assert app.post(f"/api/posts/{pid}/history", {"platform": pl, "decision": "absent"})[0] == 200
     assert app.post(f"/api/posts/{pid}/publish", {"confirm": "post"})[0] == 200
     assert wait_for(lambda: posts(app)["p__short-1-pub.mp4"]["bucket"] == "posted")
     con = db.connect()

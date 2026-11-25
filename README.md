@@ -1,6 +1,6 @@
 # Social Command Center
 
-Post your shorts to YouTube Shorts, Instagram Reels, Facebook Reels and TikTok, now or weeks ahead, from one dashboard on this Mac.
+Prepare and schedule Shorts for YouTube, Instagram, Facebook, TikTok, LinkedIn and X from one dashboard on this Mac.
 
 ## Start it
 
@@ -8,7 +8,7 @@ Double-click `OPEN-SOCIAL-COMMAND-CENTER.command`. The dashboard opens at http:/
 
 ## Your first batch
 
-1. **Import new shorts.** They come from `~/Movies/Shorts Ready`.
+1. **Import new shorts.** They come from your Shorts folder (set it under Connections & Settings; the default is `~/Movies/Shorts Ready`).
 2. **Write captions.** Select shorts with the checkboxes (shift-click selects a range), then click ✨ Write captions. Whisper and Claude draft the titles and captions, one at a time.
 3. **Edit.** Skim each draft and fix anything in the editor drawer.
 4. **Auto-schedule.** Click 📅 Auto-schedule… and look at the preview plan. Leave "Approve them so they post automatically" ticked, then confirm.
@@ -20,7 +20,9 @@ Settings → Posting schedule sets the times each day and the weekdays. The defa
 
 ## What makes posts actually go out
 
-Each platform has its own route. It can be **Dry run**, **Direct** or **Upload-Post**. Everything starts in Dry run, which shows what would post and sends nothing.
+Each platform starts in **Dry run**. **Upload-Post** supports all six destinations. YouTube, Instagram, Facebook and TikTok also have **Direct** routes. Select LinkedIn and X per Short in the editor. LinkedIn uses the connected personal profile. Review each selected account’s posting history before release.
+
+Each brand has its own accounts. The editor shows the brand, platform and real handle for every destination, and a live post goes only to the accounts you ticked. Set this up under Connections & Settings → Brands & accounts.
 
 Posts only go out while a scheduler runs. You have two options:
 

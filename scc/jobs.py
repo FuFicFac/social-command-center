@@ -16,9 +16,10 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import captions, config, db, engine, media
+from . import accounts, captions, config, db, engine, media
 
-PLIST = Path.home() / "Library/LaunchAgents/com.creator.social-command-center.plist"
+PLIST = (Path.home() / "Library/LaunchAgents"
+         / f"{config.load().get('general', 'label_prefix')}.social-command-center.plist")
 SCHEDULER_INTERVAL = 60
 
 _lock = threading.Lock()
@@ -204,7 +205,18 @@ def start_connect(platform: str) -> None:
     def run() -> None:
         try:
             cfg = config.load()
-            who = YouTube(cfg).connect() if platform == "youtube" else TikTok(cfg).connect()
+            if platform == "youtube":
+                ch = YouTube(cfg).connect()
+                con = db.connect()
+                try:  # each channel is its own account with its own Keychain item
+                    accounts.upsert(con, conn="direct", profile=ch["id"], platform="youtube",
+                                    platform_id=ch["id"], handle=ch["handle"] or None,
+                                    name=ch["title"])
+                finally:
+                    con.close()
+                who = ch["title"]
+            else:
+                who = TikTok(cfg).connect()
             msg = f"connected: {who}"
         except Exception as e:
             msg = f"error: {str(e)[:300]}"

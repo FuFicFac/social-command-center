@@ -7,13 +7,18 @@ import subprocess
 import time
 from pathlib import Path
 
-from scc.fini import FOLDER, STATE, baseline_file
+from scc import config
+from scc.fini import STATE, baseline_file, folder
+
+cfg = config.load()
+FOLDER = folder(cfg)
+PREFIX = cfg.get("general", "label_prefix")
 
 root = Path(__file__).resolve().parents[1]
 state_bin = STATE / "bin"
 state_bin.mkdir(parents=True, exist_ok=True)
 if not FOLDER.is_dir():
-    raise SystemExit("Mount the Fini Vids volume before installing")
+    raise SystemExit(f"Set fini.folder in config.toml to your editor's export folder ({FOLDER} not found)")
 baseline_file(FOLDER, STATE)
 subprocess.run(
     ["swiftc", "-O", str(root / "macos/StudioAX.swift"), "-o", str(state_bin / "studio-ax.next")],
@@ -46,11 +51,11 @@ child.on('exit',(code)=>process.exit(code??1));
 """
 for label, args, options in [
     (
-        "com.creator.social-command-center.dashboard",
+        f"{PREFIX}.social-command-center.dashboard",
         ["-m", "scc", "serve", "--no-open"],
         {"KeepAlive": {"SuccessfulExit": False}, "ThrottleInterval": 15},
     ),
-    ("com.creator.fini-intake", ["-m", "scc.fini"], {"StartInterval": 60}),
+    (f"{PREFIX}.fini-intake", ["-m", "scc.fini"], {"StartInterval": 60}),
 ]:
     log = Path.home() / "Library/Logs" / (label + ".log")
     plist = {

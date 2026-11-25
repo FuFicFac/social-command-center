@@ -24,7 +24,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from . import config, db, jobs, media, schedule
+from . import accounts, config, db, jobs, media, schedule
 from . import secrets as keychain
 from .adapters import for_route
 from .cli import import_folder, parse_when
@@ -49,6 +49,11 @@ _cfg_lock = threading.RLock()      # serializes config.toml read-modify-write
 _thumb_lock = threading.Lock()
 _meta_lock = threading.Lock()
 _meta_pages: dict[str, Any] = {"expires": 0.0, "pages": {}}
+_up_plan: dict[str, Any] = {"limit": None, "plan": None, "checked_at": None}
+PROFILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{1,39}")
+# Worst first: the status a platform shows when it has more than one destination.
+SEVERITY = ("needs_review", "failed", "uploading", "processing", "pending", "inbox", "private",
+            "published", "simulated", "skipped")
 
 
 class Fail(Exception):
@@ -72,6 +77,7 @@ def settings_view(cfg: config.Config) -> dict[str, Any]:
         "schedule": {"slots": cfg.slots(), "days": cfg.days()},
         "routing": {p: cfg.route(p) for p in config.PLATFORMS},
         "tiktok_mode": cfg.get("tiktok", "mode"),
+        "import_brand": cfg.get("general", "import_brand") or "",
     }
 
 
@@ -83,7 +89,7 @@ def connections_view(cfg: config.Config) -> dict[str, Any]:
     return {
         "youtube": {"client_id": cfg.get("youtube", "client_id"),
                     "has_client_secret": has("youtube.client_secret"),
-                    "signed_in": has("youtube.refresh_token")},
+                    "signed_in": has("youtube.refresh_token")},  # the original single sign-in
         "meta": {"app_id": cfg.get("meta", "app_id"), "has_app_secret": has("meta.app_secret"),
                  "page_id": cfg.get("meta", "page_id"), "ig_user_id": cfg.get("meta", "ig_user_id"),
                  "signed_in": has("meta.page_token")},
@@ -93,6 +99,17 @@ def connections_view(cfg: config.Config) -> dict[str, Any]:
                    "signed_in": has("tiktok.refresh_token")},
         "upload_post": {"user": cfg.get("upload_post", "user"), "has_api_key": has("upload_post.api_key")},
     }
+
+
+def accounts_view(con) -> dict[str, Any]:
+    """Brands, the accounts mapped to them, Upload-Post profiles and unconfirmed history."""
+    accts = [{k: a[k] for k in ("id", "platform", "platform_id", "handle", "name", "label", "conn",
+                                "profile", "brand_id", "brand_name", "is_default", "status",
+                                "detail", "verified_at")} for a in accounts.list_accounts(con)]
+    profiles = [dict(r) for r in con.execute(
+        "SELECT name, display_name, present, seen_at FROM profiles ORDER BY name")]
+    return {"brands": accounts.brands(con), "accounts": accts, "profiles": profiles,
+            "upload_post_plan": dict(_up_plan), "receipt_review": accounts.review_receipts(con)}
 
 
 def slug(path: str) -> str:
@@ -135,6 +152,8 @@ def present_posts(con, posts: list[dict[str, Any]] | None = None,
                   fill_durations: int = 8) -> list[dict[str, Any]]:
     posts = db.list_posts(con) if posts is None else posts
     dupes = duplicates(posts)
+    known = {a["id"]: a for a in accounts.list_accounts(con)}
+    brand_names = {b["id"]: b["name"] for b in accounts.brands(con)}
     out = []
     for p in posts:
         dur = p.get("duration")
@@ -143,15 +162,42 @@ def present_posts(con, posts: list[dict[str, Any]] | None = None,
             dur = media.duration(p["video_path"])
             if dur is not None:
                 con.execute("UPDATE posts SET duration=? WHERE id=?", (dur, p["id"]))
+        destinations = []
+        for key, d in p["deliveries"].items():
+            acct = known.get(d["account_id"])
+            state = None
+            if d["account_id"]:
+                state = ("missing" if acct is None or acct["status"] == "missing"
+                         or acct["platform_id"] != d["account_ref"] else
+                         "expired" if acct["status"] == "expired" else "ok")
+            destinations.append({
+                "key": key, "platform": d["platform"], "account_id": d["account_id"],
+                "account": db.account_label(d), "handle": d["account_handle"],
+                "name": d["account_name"], "brand_id": d["brand_id"],
+                "brand": brand_names.get(d["brand_id"]), "profile": d["profile"],
+                "account_state": state, "status": d["status"], "route": d["route"],
+                "url": d["url"], "remote_id": d["remote_id"], "error": d["error"],
+                "needs_request_check": db.needs_request_check(d), "attempts": d["attempts"],
+                "meta": d["meta"], "updated_at": d["updated_at"]})
+        # One entry per platform for lists and calendars: its worst-off destination.
         deliveries = {}
         for plat in config.PLATFORMS:
-            d = p["deliveries"].get(plat)
-            deliveries[plat] = (
-                {"status": d["status"], "route": d["route"], "url": d["url"], "error": d["error"],
-                 "attempts": d["attempts"], "meta": d["meta"], "updated_at": d["updated_at"]}
-                if d else {"status": "skipped", "route": None, "url": None, "error": None,
-                           "attempts": 0, "meta": {}, "updated_at": p["updated_at"]})
+            rows = sorted((d for d in destinations if d["platform"] == plat),
+                          key=lambda d: SEVERITY.index(d["status"]) if d["status"] in SEVERITY else 0)
+            live = [d for d in rows if d["status"] != "skipped"]
+            if rows:
+                d = rows[0]
+                deliveries[plat] = {k: d[k] for k in (
+                    "status", "route", "url", "remote_id", "error", "needs_request_check",
+                    "attempts", "meta", "updated_at")}
+                deliveries[plat]["accounts"] = [x["account"] for x in live if x["account"]]
+            else:
+                deliveries[plat] = {"status": "skipped", "route": None, "url": None, "remote_id": None,
+                                    "error": None, "attempts": 0, "meta": {}, "accounts": [],
+                                    "updated_at": p["updated_at"]}
         out.append({
+            "brand": p.get("brand"), "brand_name": brand_names.get(p.get("brand")),
+            "destinations": destinations,
             "id": p["id"], "video_path": p["video_path"], "filename": Path(p["video_path"]).name,
             "title": p["title"], "caption": p["caption"],
             "overrides": {k: {a: b for a, b in o.items() if b}
@@ -172,7 +218,8 @@ def state() -> dict[str, Any]:
         platforms = {}
         for p in config.PLATFORMS:
             route = cfg.route(p)
-            configured = {r: for_route(cfg, p, r).readiness(p)[0] for r in ("direct", "upload_post")}
+            configured = {r: for_route(cfg, p, r).readiness(p)[0]
+                          for r in config.routes_for(p) if r != "dryrun"}
             ok, why = for_route(cfg, p, route).readiness(p)
             platforms[p] = {"route": route, "ready": ok, "detail": why, "configured": configured}
         posts = present_posts(con)
@@ -189,6 +236,7 @@ def state() -> dict[str, Any]:
             "posts": posts, "jobs": jobs.post_jobs(), "caption_queue": jobs.caption_queue(),
             "connect": jobs.connect_state(), "scheduler": jobs.scheduler_state(),
             "events": db.recent_events(con, 60), "counts": counts,
+            **accounts_view(con),
         }
     finally:
         con.close()
@@ -253,6 +301,30 @@ def op_targets(con, pid: str, targets: Any) -> None:
     db.set_targets(con, pid, targets)
 
 
+def op_destinations(con, pid: str, wanted: Any) -> None:
+    """Exactly these destinations: [{"platform", "account_id" or null}, ...]."""
+    if not isinstance(wanted, list):
+        raise Fail("destinations must be a list")
+    pairs = []
+    for item in wanted:
+        if not isinstance(item, dict) or item.get("platform") not in config.PLATFORMS:
+            raise Fail(f"each destination needs a platform from {list(config.PLATFORMS)}")
+        pairs.append((item["platform"], str(item.get("account_id") or "")))
+    need_post(con, pid)
+    try:
+        db.set_destinations(con, pid, pairs)
+    except ValueError as e:
+        raise Fail(str(e)) from e
+
+
+def op_brand(con, pid: str, brand: Any) -> None:
+    need_post(con, pid)
+    try:
+        db.set_brand(con, pid, str(brand) if brand else None)
+    except ValueError as e:
+        raise Fail(str(e)) from e
+
+
 def op_unschedule(con, pid: str) -> None:
     # Approved + no time means "post now", so taking a post off the calendar also
     # returns it to draft — unscheduling must never trigger a post.
@@ -292,8 +364,14 @@ def op_update(con, cfg, pid: str, body: dict[str, Any]) -> bool:
         fields["approved_at"] = None
     if fields:
         db.update_post(con, pid, **fields)
-    if "targets" in body:
+    if "brand" in body and (body["brand"] or None) != post.get("brand"):
+        op_brand(con, pid, body["brand"])  # re-suggests that brand's accounts
+    if "destinations" in body:
+        op_destinations(con, pid, body["destinations"])
+    elif "targets" in body:
         op_targets(con, pid, body["targets"])
+    if post["approved_at"] and not need_post(con, pid)["approved_at"]:
+        unapproved = True  # destinations changed: the approval no longer covers them
     return unapproved
 
 
@@ -302,7 +380,7 @@ def op_publish(con, pid: str, body: dict[str, Any]) -> None:
     if body.get("confirm") != "post":
         raise Fail("confirmation required")
     for p, d in post["deliveries"].items():
-        if d["status"] == "failed":
+        if d["status"] == "failed" and not db.retry_blocked(d):
             db.update_delivery(con, pid, p, status="pending", attempts=0)
     db.update_post(con, pid, approved_at=db.now(), scheduled_at=None)
     db.log(con, "info", "publish-now from dashboard", pid)
@@ -314,10 +392,10 @@ def op_publish(con, pid: str, body: dict[str, Any]) -> None:
 
 def op_retry(con, pid: str, body: dict[str, Any]) -> None:
     post = need_post(con, pid)
-    plats = body.get("platforms") or []
+    plats = body.get("keys") or body.get("platforms") or []
     if not isinstance(plats, list):
         raise Fail("platforms must be a list")
-    chosen = [p for p in plats if p in post["deliveries"]]
+    chosen = db.keys_for(post, [str(p) for p in plats])  # only the destinations named
     if any(post["deliveries"][p]["status"] in db.ACTIVE for p in chosen):
         raise Fail("still in flight — wait for it to settle", 409)
     if any(db.retry_blocked(post["deliveries"][p]) for p in chosen):
@@ -333,6 +411,7 @@ BULK = {
     "unapprove": lambda con, pid, body: op_unapprove(con, pid),
     "remove": lambda con, pid, body: op_remove(con, pid),
     "targets": lambda con, pid, body: op_targets(con, pid, body.get("targets")),
+    "brand": lambda con, pid, body: op_brand(con, pid, body.get("brand")),
     "unschedule": lambda con, pid, body: op_unschedule(con, pid),
 }
 
@@ -432,10 +511,21 @@ def apply_settings(body: dict[str, Any]) -> dict[str, Any]:
                 for p, r in routing.items():
                     if p not in config.PLATFORMS:
                         issues.append(f"unknown platform {p!r}")
-                    elif r not in config.ROUTES:
-                        issues.append(f"route for {p} must be one of {list(config.ROUTES)}")
+                    elif r not in config.routes_for(p):
+                        issues.append(f"route for {p} must be one of {list(config.routes_for(p))}")
                     else:
                         new.append(("routing", p, r))
+        if "import_brand" in body:
+            brand = str(body["import_brand"] or "")
+            con = db.connect()
+            try:
+                known = {b["id"] for b in accounts.brands(con)}
+            finally:
+                con.close()
+            if brand and brand not in known:
+                issues.append(f"unknown brand {brand!r}")
+            else:
+                new.append(("general", "import_brand", brand))
         if "tiktok_mode" in body:
             if body["tiktok_mode"] in ("inbox", "direct"):
                 new.append(("tiktok", "mode", body["tiktok_mode"]))
@@ -485,14 +575,121 @@ def disconnect(platform: str, route: str) -> list[str]:
         raise Fail("unknown platform")
     if route == "upload_post":
         names = ["upload_post.api_key"]
-    elif route == "direct":
+    elif route == "direct" and route in config.routes_for(platform):
         names = [{"youtube": "youtube.refresh_token", "instagram": "meta.page_token",
                   "facebook": "meta.page_token", "tiktok": "tiktok.refresh_token"}[platform]]
     else:
         raise Fail("route must be direct or upload_post")
+    if platform == "youtube" and route == "direct":
+        con = db.connect()
+        try:  # every channel signed in directly, not just the first
+            rows = con.execute("SELECT id, profile FROM accounts WHERE conn='direct' AND "
+                               "platform='youtube'").fetchall()
+            names += [f"youtube.refresh_token.{r['profile']}" for r in rows]
+            con.execute("UPDATE accounts SET status='missing', is_default=0, detail='Signed out.' "
+                        "WHERE conn='direct' AND platform='youtube'")
+        finally:
+            con.close()
     for n in names:
         keychain.delete(n)
     return names
+
+
+# ----------------------------------------------------- brands & accounts --
+def discover(con, cfg: config.Config) -> dict[str, Any]:
+    """Read every Upload-Post profile and its connected accounts; nothing is changed there."""
+    from .adapters.base import NotSubmitted
+    from .adapters.upload_post import UploadPost
+    from .adapters.youtube import LEGACY_TOKEN, YouTube, token_name
+    notes: list[str] = []
+    waiting = len(accounts.review_receipts(con))
+    if keychain.get("upload_post.api_key"):
+        try:
+            found = UploadPost(cfg).list_profiles()
+        except NotSubmitted as e:
+            raise Fail(str(e), 502) from e
+        accounts.sync_profiles(con, found["profiles"])
+        _up_plan.update(limit=found["limit"], plan=found["plan"], checked_at=db.now())
+        notes.append(f"{len(found['profiles'])} Upload-Post profile(s)")
+    # A sign-in saved before channels had their own Keychain items: file it under its channel.
+    if keychain.get(LEGACY_TOKEN) and cfg.get("youtube", "client_id"):
+        try:
+            ch = YouTube(cfg).current_channel()
+        except NotSubmitted:
+            ch = None
+        if ch:
+            if not keychain.get(token_name(ch["id"])):
+                keychain.put(token_name(ch["id"]), keychain.get(LEGACY_TOKEN))
+            accounts.upsert(con, conn="direct", profile=ch["id"], platform="youtube",
+                            platform_id=ch["id"], handle=ch["handle"] or None, name=ch["title"])
+            notes.append(f"YouTube channel {ch['title']}")
+    left = accounts.prove_receipts(con)["review"]
+    return {"ok": True, "detail": ", ".join(notes) or "Nothing is connected yet.",
+            "proven": waiting - left, "review": left}
+
+
+def accounts_post(con, cfg: config.Config, path: str, body: dict[str, Any]) -> dict[str, Any] | None:
+    from .adapters.base import NotSubmitted
+    from .adapters.upload_post import UploadPost
+    try:
+        if path == "/api/accounts/discover":
+            return discover(con, cfg)
+        if path == "/api/accounts/profile":       # create an empty Upload-Post profile
+            name = _text(body, "profile")
+            if not PROFILE_NAME.fullmatch(name):
+                raise Fail("Profile names use 2–40 letters, numbers, dashes or underscores.")
+            UploadPost(cfg).create_profile(name)
+            return discover(con, cfg)
+        if path == "/api/accounts/link":          # where you sign that profile in to accounts
+            name = _text(body, "profile")
+            if not con.execute("SELECT 1 FROM profiles WHERE name=? AND present=1", (name,)).fetchone():
+                raise Fail("Unknown profile — discover profiles first.", 404)
+            plats = body.get("platforms")
+            if plats is not None and (not isinstance(plats, list)
+                                      or any(p not in config.PLATFORMS for p in plats)):
+                raise Fail("platforms must be a list of platform names")
+            return {"ok": True, "url": UploadPost(cfg, name).connect_link(plats)}
+        if path == "/api/accounts/map":
+            brand = _text(body, "brand_id") or None
+            ids = [_text(body, "account_id")] if _text(body, "account_id") else [
+                r["id"] for r in con.execute(
+                    "SELECT id FROM accounts WHERE conn='upload_post' AND profile=? AND "
+                    "status='verified'", (_text(body, "profile"),))]
+            if not ids:
+                raise Fail("Nothing to assign — that profile has no verified accounts.")
+            for account_id in ids:
+                accounts.map_account(con, account_id, brand, bool(body.get("default")) or None)
+            return {"ok": True, "assigned": len(ids)}
+        if path == "/api/accounts/remove":        # sign one directly-connected channel out
+            acct = accounts.get(con, _text(body, "account_id"))
+            if not acct or acct["conn"] != "direct":
+                raise Fail("Only a direct YouTube sign-in can be removed here.")
+            keychain.delete(f"youtube.refresh_token.{acct['profile']}")
+            con.execute("UPDATE accounts SET status='missing', is_default=0, detail='Signed out.' "
+                        "WHERE id=?", (acct["id"],))
+            return {"ok": True}
+        if path == "/api/brands":
+            return {"ok": True, "id": accounts.save_brand(con, _text(body, "name"),
+                                                          _text(body, "id") or None)}
+        if path == "/api/receipts/assign":
+            items = body.get("items")
+            if not isinstance(items, list) or not items:
+                raise Fail("items must be a non-empty list")
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                for item in items:
+                    accounts.assign_receipt(con, str(item.get("sha256")), str(item.get("platform")),
+                                            _text(body, "account_id"))
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
+            return {"ok": True, "assigned": len(items)}
+    except NotSubmitted as e:
+        raise Fail(str(e), 502) from e
+    except ValueError as e:
+        raise Fail(str(e)) from e
+    return None
 
 
 def meta_remember(pages: list[dict[str, Any]]) -> None:
@@ -603,7 +800,7 @@ def upload_post_verify(cfg: config.Config) -> tuple[bool, str]:
     if fn is None:
         return True, why
     try:
-        return fn("youtube")
+        return fn(None)
     except Exception as e:
         return False, f"{type(e).__name__}: {str(e)[:300]}"
 
@@ -792,6 +989,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route_data(self, con, path: str, body: dict[str, Any]) -> dict[str, Any] | None:
         cfg = config.load()
+        if path.startswith(("/api/accounts/", "/api/brands", "/api/receipts/")):
+            return accounts_post(con, cfg, path, body)
         if m := re.fullmatch(r"/api/shorts-inventory/([a-f0-9]{64})/prepare", path):
             from .inventory import prepare_for_social
             return prepare_for_social(con, m.group(1))
@@ -799,7 +998,7 @@ class Handler(BaseHTTPRequestHandler):
             folder = Path(cfg.get("general", "shorts_folder")).expanduser()
             if not folder.is_dir():
                 raise Fail(f"shorts folder not found: {folder}")
-            r = import_folder(con, cfg, folder, list(config.PLATFORMS))
+            r = import_folder(con, cfg, folder, list(config.DEFAULT_TARGETS))
             for pid in r["added"] if cfg.get("general", "auto_captions") else []:
                 # new shorts get AI caption drafts automatically
                 try:
@@ -851,9 +1050,14 @@ class Handler(BaseHTTPRequestHandler):
             op_captions(con, pid)
             return {"ok": True}
         if action == "history":
-            platform = body.get("platform")
-            delivery = need_post(con,pid)["deliveries"].get(platform)
-            if not delivery or not delivery["meta"].get("history_unverified") or delivery["status"] != "pending":
+            key = str(body.get("key") or body.get("platform") or "")
+            con.execute("BEGIN IMMEDIATE")
+            delivery = need_post(con, pid)["deliveries"].get(key)
+            platform = delivery["platform"] if delivery else None
+            who = db.account_label(delivery) or None if delivery else None
+            reconcile = delivery and db.needs_request_check(delivery)
+            if not reconcile and not (delivery and delivery["status"] == "pending"
+                                      and delivery["meta"].get("history_unverified")):
                 raise Fail("This destination is not waiting for a history check.", 409)
             decision = body.get("decision")
             meta = {**delivery["meta"], "history_unverified":False, "history_checked_at":db.now()}
@@ -863,14 +1067,31 @@ class Handler(BaseHTTPRequestHandler):
                 if url and not url.startswith("https://"):
                     raise Fail("Use the original HTTPS post link.")
                 meta["previously_uploaded"] = True
-                with con:
-                    db.update_delivery(con, pid, platform, status="skipped", route="external",
-                                       url=url or None, error="Previously uploaded to this account.", meta=meta)
+                db.update_delivery(con, pid, key, status="skipped", route="external",
+                                   url=url or None, error="Previously uploaded to this account.", meta=meta)
             elif decision == "absent":
-                db.update_delivery(con, pid, platform, error=None, meta=meta)
+                if reconcile:
+                    # The operator checked the original request and the account. Only an
+                    # acceptance placeholder for this attempt can be cleared here.
+                    ref = delivery["account_ref"]  # only this account's placeholder
+                    con.execute(
+                        "DELETE FROM upload_receipts WHERE post_id=? AND platform=? AND "
+                        "account_ref=? AND status='processing' AND remote_id IS NULL AND url IS "
+                        "NULL AND sha256=(SELECT sha256 FROM posts WHERE id=?)",
+                        (pid, platform, ref, pid))
+                    receipt = con.execute(
+                        "SELECT status FROM upload_receipts WHERE sha256=(SELECT sha256 FROM posts "
+                        "WHERE id=?) AND platform=? AND account_ref=?", (pid, platform, ref)).fetchone()
+                    if receipt:
+                        raise Fail("An upload receipt exists. Reconcile it before retrying.", 409)
+                    db.update_post(con, pid, approved_at=None, scheduled_at=None)
+                    db.log(con, "info", f"Confirmed no upload for request {meta.pop('request_id')}",
+                           pid, platform, who)
+                db.update_delivery(con, pid, key, status="pending", error=None, meta=meta)
             else:
                 raise Fail("Choose an existing upload or confirm the account was checked.")
-            db.log(con, "info", f"Account history checked: {decision}", pid, platform)
+            db.log(con, "info", f"Account history checked: {decision}", pid, platform, who)
+            con.commit()
             return {"ok":True}
         if action == "retry":
             op_retry(con, pid, body)

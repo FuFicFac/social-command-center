@@ -19,8 +19,8 @@ WHISPER_CANDIDATES = (
     str(Path.home() / "Library/Python/3.9/bin/whisper"),
 )
 
-PROMPT = """You write social copy for short vertical videos from the creator's channel
-"Why AI Matters" (AI for creators and regular people; voice: plain, curious, direct, no hype).
+PROMPT = """You write social copy for short vertical videos{byline}
+(AI for creators and regular people; voice: plain, curious, direct, no hype).
 
 Here is the transcript of one short:
 <transcript>
@@ -34,7 +34,9 @@ Return ONLY a JSON object with these keys:
   "tiktok":    TikTok caption, punchier, max 150 characters incl. 3-4 hashtags
   "instagram": Instagram Reels caption, 1-3 short sentences + a soft call to follow, then 5-8 hashtags
   "facebook":  Facebook Reels caption, conversational 1-2 sentences, 1-3 hashtags
-Rules: never invent facts not in the transcript; spell the name "the creator" if used;
+  "linkedin":  LinkedIn commentary with one concrete takeaway for someone at work
+  "x":         one stand-alone X post under 280 characters, centered on the spoken hook
+Rules: never invent facts not in the transcript;{name_rule}
 no "In this video".
 """
 
@@ -57,10 +59,19 @@ def transcribe(video: Path, sha: str) -> str:
     return text
 
 
+def prompt(transcript: str, hint: str, cfg: config.Config | None = None) -> str:
+    """The caption request, signed with the creator's name when one is configured."""
+    name = ((cfg or config.load()).get("general", "creator_name") or "").strip()
+    return PROMPT.format(
+        transcript=transcript[:6000], hint=hint,
+        byline=(f" from {name}'s channel" if name else " for the channel") + ' "Why AI Matters"',
+        name_rule=f' spell the name "{name}" if used;' if name else "")
+
+
 def draft(transcript: str, hint: str) -> dict[str, Any]:
     claude = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
     out = subprocess.run(
-        [claude, "-p", PROMPT.format(transcript=transcript[:6000], hint=hint),
+        [claude, "-p", prompt(transcript, hint),
          "--output-format", "json"],
         capture_output=True, text=True, timeout=300, check=True,
     ).stdout
@@ -75,6 +86,6 @@ def to_post_fields(d: dict[str, Any]) -> dict[str, Any]:
     return {
         "title": str(d.get("title", ""))[:100],
         "caption": str(d.get("caption", "")),
-        "overrides": {p: {"caption": str(d[p])} for p in ("tiktok", "instagram", "facebook")
+        "overrides": {p: {"caption": str(d[p])} for p in config.SOCIAL_CAPTIONS
                       if d.get(p)},
     }

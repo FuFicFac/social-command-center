@@ -9,7 +9,20 @@ from urllib.parse import unquote, urlparse
 
 STATE = Path.home() / "Library/Application Support/Fini Vids"
 HELPER = STATE / "bin/studio-ax"
-CHANNELS = {"wam": "UC_FIRST_CHANNEL_ID_HERE_", "alist": "UC_SECOND_CHANNEL_ID_HERE"}
+# The channel name Studio shows for each brand; the channel IDs live in config.toml
+# ([fini] channel_wam / channel_alist) so they are never part of the code.
+IDENTITY = {"wam": "Why AI Matters", "alist": "on the A List"}
+
+
+def channel_id(brand):
+    from . import config
+
+    if brand not in IDENTITY:
+        raise RuntimeError(f"No YouTube channel is set up for {brand!r}")
+    found = config.load().get("fini", f"channel_{brand}")
+    if not found:
+        raise RuntimeError(f"Set fini.channel_{brand} in config.toml to that brand's YouTube channel ID")
+    return found
 
 
 def command(*args, **kwargs):
@@ -53,7 +66,8 @@ def wait(check, seconds=18):
 
 class Studio:
     def __init__(self, channel):
-        self.channel = CHANNELS[channel]
+        self.brand = channel
+        self.channel = channel_id(channel)
         self.home = f"https://studio.youtube.com/channel/{self.channel}/videos"
         self.window = None
         self.video_id = None
@@ -99,10 +113,7 @@ class Studio:
             raise RuntimeError("Open the intended channel in Studio")
         self.window = int(result)
         self.guard()
-        identity = {
-            "UC_FIRST_CHANNEL_ID_HERE_": "Why AI Matters",
-            "UC_SECOND_CHANNEL_ID_HERE": "on the A List",
-        }[self.channel]
+        identity = IDENTITY[self.brand]
         if not any(
             identity.lower() in name(r).lower() for r in controls() if r["role"] == "AXStaticText"
         ):

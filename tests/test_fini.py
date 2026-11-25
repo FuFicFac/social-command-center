@@ -24,6 +24,8 @@ def packaging(path, kind, state):
         "instagram": "Instagram caption",
         "facebook": "Facebook caption",
         "tiktok": "TikTok caption",
+        "linkedin": "LinkedIn commentary",
+        "x": "X caption",
     }
 
 
@@ -53,8 +55,8 @@ def test_baseline_copies_settling_and_unique_post(intake, monkeypatch):
     assert len(db.list_posts(con)) == 1
     newpost = next(p for p in db.list_posts(con) if p["sha256"] == media.sha256(new))
     assert newpost["approved_at"] is None
-    assert set(newpost["deliveries"]) == set(config.PLATFORMS)
-    assert set(newpost["overrides"]) == {"facebook", "instagram", "tiktok"}
+    assert set(newpost["deliveries"]) == set(config.DEFAULT_TARGETS)
+    assert set(newpost["overrides"]) == set(config.SOCIAL_CAPTIONS)
     assert all(
         d["status"] == "pending" and d["attempts"] == 0 for d in newpost["deliveries"].values()
     )
@@ -103,6 +105,7 @@ def test_main_never_enters_social_dispatch_or_retries_ambiguous_upload(intake, m
     fini.tick(*intake, now=0)
     (folder / "main.mp4").write_bytes(b"long")
     monkeypatch.setattr(media, "probe", lambda p: media.Probe(360, 1920, 1080, 4, "h264", True))
+    monkeypatch.setattr(media, "thumbnail", lambda *a, **kw: True)
     transactions = []
 
     def fail_after_submission(path, title, desc, brand, checkpoint):
@@ -122,6 +125,7 @@ def test_youtube_pause_keeps_long_form_local(intake, monkeypatch):
     fini.tick(*intake, now=0)
     (folder / "main.mp4").write_bytes(b"episode")
     monkeypatch.setattr(media, "probe", lambda p: media.Probe(420, 1920, 1080, 7, "h264", True))
+    monkeypatch.setattr(media, "thumbnail", lambda *a, **kw: True)
     for t in (1, 92, 93, 900):
         fini.tick(
             *intake,

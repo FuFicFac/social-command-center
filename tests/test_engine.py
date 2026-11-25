@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from scc import config, db, engine, media
+from scc import accounts, config, db, engine, media
 from scc.adapters import base
 from scc.adapters.tiktok import chunk_plan
 from scc.adapters.upload_post import _parse_results
@@ -27,6 +27,8 @@ def env(tmp_path, monkeypatch):
 def make_post(con, video, **kw):
     pid = db.create_post(con, str(video), media.sha256(video), kw.get("title", "Books to the desk"),
                          kw.get("caption", "A caption #ai"), kw.get("to", list(config.PLATFORMS)))
+    for platform in db.get_post(con, pid)["deliveries"]:
+        db.update_delivery(con, pid, platform, meta={"history_checked_at": db.now()})
     db.update_post(con, pid, approved_at=db.now())
     return pid
 
@@ -41,7 +43,7 @@ class Fake:
     def readiness(self, platform):
         return True, "ok"
 
-    def publish(self, post, platforms, video, log):
+    def publish(self, post, platforms, video, log, **kwargs):
         self.calls.append(platforms)
         if isinstance(self.outcome, Exception):
             raise self.outcome
@@ -52,7 +54,22 @@ class Fake:
 
 
 def use(monkeypatch, fake):
-    monkeypatch.setattr(engine, "for_route", lambda cfg, p, r: fake)
+    monkeypatch.setattr(engine, "for_route", lambda cfg, p, r, profile=None: fake)
+
+
+def bind(con, pid, profile, platforms, brand=None):
+    """Select an account on `profile` for each platform, as the editor would."""
+    ids = {}
+    for p in platforms:
+        ids[p] = accounts.upsert(con, conn="upload_post", profile=profile, platform=p,
+                                 platform_id=f"{profile}-{p}-id", handle=f"@{profile}_{p}",
+                                 name=None)
+        if brand:
+            accounts.map_account(con, ids[p], brand)
+        db.rebind(con, pid, p, ids[p])
+        db.update_delivery(con, pid, f"{p}:{ids[p]}", meta={"history_checked_at": db.now()})
+    db.update_post(con, pid, approved_at=db.now())
+    return ids
 
 
 def statuses(con, pid):
@@ -84,7 +101,7 @@ def test_published_is_never_resent(env, monkeypatch):
     pid = make_post(con, video)
     engine.run_once(con, cfg)
     engine.run_once(con, cfg)
-    assert sum(len(c) for c in fake.calls) == 4  # each platform exactly once
+    assert sum(len(c) for c in fake.calls) == len(config.PLATFORMS)
     assert set(statuses(con, pid).values()) == {"published"}
 
 
@@ -148,7 +165,11 @@ def test_upload_post_is_one_call_for_many(env, monkeypatch):
     cfg.set("routing", "instagram", "upload_post")
     fake = Fake("processing")
     use(monkeypatch, fake)
-    make_post(con, video, to=["tiktok", "instagram"])
+    pid = make_post(con, video, to=["tiktok", "instagram"])
+    engine.run_once(con, cfg)
+    assert fake.calls == []  # live, but nobody has said which accounts receive it
+    assert "Choose which tiktok account" in db.get_post(con, pid)["deliveries"]["tiktok"]["error"]
+    bind(con, pid, "default", ["tiktok", "instagram"])
     engine.run_once(con, cfg)
     assert fake.calls == [["instagram", "tiktok"]] or fake.calls == [["tiktok", "instagram"]]
 

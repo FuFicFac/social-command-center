@@ -2,12 +2,14 @@
 // No frameworks. Every server string goes through textContent / text nodes (never innerHTML).
 
 // ───────────────────────────────────────────────────────────── constants ──
-export const ORDER = ["tiktok", "instagram", "facebook", "youtube"];
+export const ORDER = ["tiktok", "instagram", "linkedin", "x", "facebook", "youtube"];
 export const PLAT = {
   youtube:   { name: "YouTube",   color: "#FF0033", limit: 5000,  limitWhat: "description" },
   instagram: { name: "Instagram", color: "#E1306C", limit: 2200,  limitWhat: "caption" },
   facebook:  { name: "Facebook",  color: "#1877F2", limit: 63206, limitWhat: "caption" },
   tiktok:    { name: "TikTok",    color: "#FE2C55", limit: 2200,  limitWhat: "caption" },
+  linkedin:  { name: "LinkedIn",  color: "#0A66C2", limit: 3000,  limitWhat: "caption" },
+  x:         { name: "X",         color: "var(--text)", limit: 280, limitWhat: "caption" },
 };
 export const ROUTE_LABEL = { dryrun: "Dry run", direct: "Direct", upload_post: "Upload-Post" };
 export const STATUS = {
@@ -108,6 +110,8 @@ export function icon(name, size = 18) {
   return s;
 }
 const G = {
+  linkedin: '<rect x="2" y="2" width="20" height="20" rx="3" fill="currentColor"/><path fill="#fff" d="M5 10h3v9H5zm1.5-4.6a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2zM10 10h2.8v1.3c.5-.9 1.5-1.5 2.9-1.5 2.5 0 3.4 1.5 3.4 4.2v5h-3v-4.6c0-1.4-.4-2-1.5-2-1.2 0-1.6.8-1.6 2V19h-3z"/>',
+  x: '<path fill="currentColor" d="M3 3h5.2l5 6.7L19 3h2l-6.9 8 7 10h-5.2l-5.5-7.5L4 21H2l7.6-8.9L3 3zm4.4 1.5H5.9l10.8 15H18z"/>',
   youtube: '<rect x="2" y="5" width="20" height="14" rx="4.5" fill="currentColor"/><path d="M10 9v6l5.2-3z" fill="#fff"/>',
   instagram: '<rect x="3.5" y="3.5" width="17" height="17" rx="5.2" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="12" cy="12" r="3.9" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="17.1" cy="6.9" r="1.3" fill="currentColor"/>',
   facebook: '<circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M13.2 21v-7h2.3l.4-2.8h-2.7V9.5c0-.8.3-1.3 1.4-1.3h1.4V5.7c-.3 0-1.1-.1-2.1-.1-2.1 0-3.4 1.2-3.4 3.5v2.1H8v2.8h2.5v7z" fill="#fff"/>',
@@ -171,6 +175,25 @@ export const tz = () => settings().timezone || Intl.DateTimeFormat().resolvedOpt
 
 // ───────────────────────────────────────────────────────────── post utils ──
 export const activeDeliveries = (p) => Object.entries(p.deliveries || {}).filter(([, d]) => d.status !== "skipped");
+// A destination is a platform plus the account that receives it. Its key is "tiktok:<account id>",
+// or just "tiktok" while no account has been chosen.
+export const platOf = (key) => String(key).split(":")[0];
+export const destinationsOf = (p) => (p.destinations || []).filter((d) => d.status !== "skipped");
+export const accounts = () => store.state?.accounts || [];
+export const brands = () => store.state?.brands || [];
+export const brandName = (id) => brands().find((b) => b.id === id)?.name || "";
+export const accountById = (id) => accounts().find((a) => a.id === id);
+/** "@handle" (or the channel name) for an account or a destination. */
+export const accountLabel = (x) => x?.label || x?.account || x?.handle || x?.name || "";
+/** "A-List · TikTok @handle, Instagram @handle" — where a short is going. */
+export function destinationSummary(p, { short = false } = {}) {
+  const live = destinationsOf(p);
+  const named = live.filter((d) => d.account);
+  const names = named.map((d) => (short ? "" : PLAT[d.platform].name + " ") + d.account);
+  const open = live.length - named.length;
+  if (open) names.push(named.length ? `${open} more with no account` : "no accounts chosen yet");
+  return [p.brand_name, names.join(", ")].filter(Boolean).join(" · ");
+}
 export const targetsOf = (p) => activeDeliveries(p).map(([k]) => k);
 export const titleOf = (p) => (p.title || "").trim() || (p.filename || "").replace(/\.[^.]+$/, "") || p.id;
 export const isLocked = (p) => p.bucket === "posted" || p.bucket === "posting";
@@ -291,7 +314,7 @@ export function statusChip(status) {
   const [label, kind] = STATUS[status] || [status, "muted"];
   return h("span", { class: `chip chip-${kind}` }, label);
 }
-/** Four small platform dots for a post's deliveries. */
+/** One status dot per destination. */
 export function platformDots(p) {
   const wrap = h("span", { class: "pdots" });
   for (const pl of ORDER) {

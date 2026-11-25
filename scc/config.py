@@ -11,21 +11,35 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-PLATFORMS = ("youtube", "instagram", "facebook", "tiktok")
+DEFAULT_TARGETS = ("youtube", "instagram", "facebook", "tiktok")
+PLATFORMS = (*DEFAULT_TARGETS, "linkedin", "x")
+SOCIAL_CAPTIONS = tuple(p for p in PLATFORMS if p != "youtube")
 ROUTES = ("direct", "upload_post", "dryrun")
+
+
+def routes_for(platform: str) -> tuple[str, ...]:
+    return ROUTES if platform in DEFAULT_TARGETS else ("upload_post", "dryrun")
 
 ROOT = Path(os.environ.get("SCC_HOME", Path(__file__).resolve().parent.parent))
 CONFIG_PATH = ROOT / "config.toml"
 DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "scc.sqlite3"
 LOCK_PATH = DATA_DIR / "run.lock"
-SHORTS_READY = Path("~/Movies/Shorts Ready")
+SHORTS_READY = Path.home() / "Movies" / "Shorts Ready"
+# Brands every installation starts with; more can be added in Connections & Settings.
+DEFAULT_BRANDS = (("wam", "Why AI Matters"), ("alist", "I'm on the A-List"))
 
 DEFAULTS: dict[str, dict[str, Any]] = {
     # Where each platform's posts go. dryrun = log what would happen, touch nothing.
     "routing": {p: "dryrun" for p in PLATFORMS},
     "general": {"timezone": "America/Los_Angeles", "shorts_folder": str(SHORTS_READY),
-                "auto_captions": True},
+                "auto_captions": True,
+                # Brand given to shorts imported from the Shorts folder ("" = choose per short).
+                "import_brand": "",
+                # Used in AI caption drafts so your name is spelled correctly.
+                "creator_name": "",
+                # Prefix for this Mac's launchd job labels, e.g. com.yourname
+                "label_prefix": "local"},
     # Posting slots (local time, general.timezone) — stored as comma strings in config.toml.
     "schedule": {"slots": "09:00,17:00", "days": "mon,tue,wed,thu,fri,sat,sun"},
     "youtube": {
@@ -51,7 +65,11 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "privacy_level": "SELF_ONLY",
         "redirect_port": 8790,
     },
-    "fini": {"auto_approve_new_shorts": False, "alist_upload_post_user": ""},
+    "fini": {"auto_approve_new_shorts": False, "alist_upload_post_user": "",
+             # Folder the editor exports finished videos into.
+             "folder": str(Path.home() / "Movies" / "Fini Vids"),
+             # YouTube channel IDs used to confirm the right Studio window per brand.
+             "channel_wam": "", "channel_alist": ""},
     "upload_post": {"user": "", "facebook_page_id": ""},
 }
 
@@ -68,8 +86,8 @@ class Config:
 
     def route(self, platform: str) -> str:
         r = self.get("routing", platform) or "dryrun"
-        if r not in ROUTES:
-            raise ValueError(f"routing.{platform} = {r!r}; must be one of {ROUTES}")
+        if r not in routes_for(platform):
+            raise ValueError(f"routing.{platform} = {r!r}; choose from {routes_for(platform)}")
         return r
 
     def slots(self) -> list[str]:

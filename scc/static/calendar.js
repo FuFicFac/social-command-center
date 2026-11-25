@@ -3,6 +3,7 @@ import {
   h, icon, thumbImg, platformDots, openModal, toast, apiGet, apiPost, errText, refreshState, openPost,
   posts, postById, titleOf, isLocked, isUnscheduled, settings, ui, localSlots, minuteKey, zonedToUtc, toWire,
   ymdIn, hhmmIn, todayYmd, addDays, addMonths, weekStart, dowOf, fmtYmd, fmtSlot, fmtTime, fmt12, DAY_KEYS, plural, debounce,
+  destinationSummary,
 } from "./core.js";
 import { openAutoSchedule } from "./schedule.js";
 
@@ -141,9 +142,11 @@ export function createCalendar() {
   // ── pieces ──
   function chip(p, { compact = false } = {}) {
     const el = h("div", { class: `cchip b-${p.bucket}${p.approved_at ? "" : " unapproved"}${compact ? " compact" : ""}`, tabindex: 0, dataset: { id: p.id },
-      title: `${titleOf(p)}${p.scheduled_at ? " — " + fmtSlot(p.scheduled_at) : ""}${p.approved_at ? "" : " (not approved)"}` },
+      title: `${titleOf(p)}${p.scheduled_at ? " — " + fmtSlot(p.scheduled_at) : ""}${p.approved_at ? "" : " (not approved)"}\n${destinationSummary(p) || "No destinations selected"}` },
     h("div", { class: "cchip-thumb" }, thumbImg(p)),
-    h("div", { class: "cchip-body" }, h("div", { class: "cchip-title" }, titleOf(p)), platformDots(p)));
+    h("div", { class: "cchip-body" }, h("div", { class: "cchip-title" }, titleOf(p)), platformDots(p),
+      // brand and the exact accounts this slot will post to
+      h("div", { class: "cchip-acct" }, destinationSummary(p, { short: true }) || "nothing selected")));
     el.addEventListener("click", () => openPost(p.id));
     el.addEventListener("keydown", (e) => { if (e.key === "Enter") openPost(p.id); });
     draggable(el, p);
@@ -210,7 +213,7 @@ export function createCalendar() {
       const cell = h("div", { class: `mday${ymd.slice(0, 7) !== month ? " other" : ""}${ymd === today ? " today" : ""}${ymd < today ? " past" : ""}`, dataset: { ymd } },
         h("button", { class: "mnum", type: "button", title: "Open this week", onclick: () => { ui.calAnchor = ymd; ui.calMode = "week"; render(true); } }, String(+ymd.slice(8))));
       for (const p of list.slice(0, 3)) {
-        const c = h("div", { class: `mchip b-${p.bucket}${p.approved_at ? "" : " unapproved"}`, tabindex: 0, title: `${titleOf(p)} — ${fmtSlot(p.scheduled_at)}` },
+        const c = h("div", { class: `mchip b-${p.bucket}${p.approved_at ? "" : " unapproved"}`, tabindex: 0, title: `${titleOf(p)} — ${fmtSlot(p.scheduled_at)}\n${destinationSummary(p) || "No destinations selected"}` },
           h("span", { class: "mt" }, fmtTime(p.scheduled_at).replace(" ", "").toLowerCase()), h("span", { class: "mtitle" }, titleOf(p)));
         c.addEventListener("click", () => openPost(p.id));
         c.addEventListener("keydown", (e) => { if (e.key === "Enter") openPost(p.id); });
@@ -289,7 +292,7 @@ export function createCalendar() {
     const key = `${start}|${days}`;
     const schedSig = posts().map((p) => `${p.id}@${p.scheduled_at || ""}`).join(",");
     const sig = JSON.stringify([ui.calMode, ui.calAnchor, key, slots.key === key, slots.ok,
-      posts().map((p) => [p.id, p.scheduled_at, p.bucket, p.title, p.approved_at, p.updated_at, Object.values(p.deliveries || {}).map((d) => d.status)]),
+      posts().map((p) => [p.id, p.scheduled_at, p.bucket, p.title, p.approved_at, p.updated_at, p.brand_name, (p.destinations || []).map((d) => [d.key, d.account, d.status])]),
       settings().schedule, settings().timezone]);
     if (!force && sig === lastSig) return;
     lastSig = sig;

@@ -11,7 +11,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import captions, config, db, engine, media, schedule, secrets
+from . import accounts, captions, config, db, engine, media, schedule, secrets
 from .adapters import for_route
 from .adapters.meta import Meta
 from .adapters.tiktok import TikTok
@@ -40,7 +40,9 @@ def local(ts: str | None, cfg: config.Config) -> str:
 
 
 def platforms_arg(text: str | None) -> list[str]:
-    if not text or text == "all":
+    if not text:
+        return list(config.DEFAULT_TARGETS)
+    if text == "all":
         return list(config.PLATFORMS)
     out = [p.strip() for p in text.split(",") if p.strip()]
     bad = [p for p in out if p not in config.PLATFORMS]
@@ -66,12 +68,13 @@ def print_post(post: dict, cfg: config.Config, full: bool = False) -> None:
         for p, o in post["overrides"].items():
             for k, v in o.items():
                 print(f"    {p}.{k}: {v}")
-    for p, d in sorted(post["deliveries"].items()):
+    for _, d in sorted(post["deliveries"].items()):
         if d["status"] == "skipped":
             continue
+        p = d["platform"]
         extra = d["url"] or d["error"] or d["meta"].get("note") or ""
-        print(f"    {ICON.get(d['status'], '?')} {p:<9} {d['status']:<12} "
-              f"{d['route'] or cfg.route(p):<11} {extra}")
+        print(f"    {ICON.get(d['status'], '?')} {p:<9} {db.account_label(d) or '(no account)':<18} "
+              f"{d['status']:<12} {d['route'] or cfg.route(p):<11} {extra}")
 
 
 # ---------------------------------------------------------------- commands --
@@ -96,6 +99,8 @@ def cmd_config(a, cfg, con):
     if not key:
         sys.exit("use section.key, e.g. meta.app_id")
     value = {"true": True, "false": False}.get(a.value.lower(), a.value)
+    if section == "routing" and (key not in config.PLATFORMS or value not in config.routes_for(key)):
+        sys.exit(f"unsupported route for {key}")
     cfg.set(section, key, value)
     config.save(cfg)
     print(f"{section}.{key} = {value!r}")
@@ -104,7 +109,11 @@ def cmd_config(a, cfg, con):
 def cmd_route(a, cfg, con):
     if a.route not in config.ROUTES:
         sys.exit(f"route must be one of {config.ROUTES}")
-    for p in platforms_arg(a.platforms):
+    selected = (list(config.DEFAULT_TARGETS) if a.route == "direct" and a.platforms == "all"
+                else platforms_arg(a.platforms))
+    for p in selected:
+        if a.route not in config.routes_for(p):
+            sys.exit(f"{p} supports Upload-Post and dry run")
         cfg.set("routing", p, a.route)
     config.save(cfg)
     cmd_status(a, cfg, con)
@@ -127,7 +136,10 @@ def cmd_secret(a, cfg, con):
 
 def cmd_connect(a, cfg, con):
     if a.platform == "youtube":
-        who = YouTube(cfg).connect()
+        ch = YouTube(cfg).connect()
+        accounts.upsert(con, conn="direct", profile=ch["id"], platform="youtube",
+                        platform_id=ch["id"], handle=ch["handle"] or None, name=ch["title"])
+        who = f"{ch['title']} ({ch['id']})"
     elif a.platform == "meta":
         who = Meta(cfg).connect()
         config.save(cfg)
@@ -154,7 +166,7 @@ def _add(con, cfg, path: Path, title: str | None, caption: str | None, to: list[
         return None
     pid = db.create_post(con, str(path), media.sha256(path),
                          title or media.title_from_filename(path), caption or "", to,
-                         parse_when(at, cfg))
+                         parse_when(at, cfg), brand=cfg.get("general", "import_brand") or None)
     dur = media.duration(path)
     if dur is not None:
         con.execute("UPDATE posts SET duration=? WHERE id=?", (dur, pid))
@@ -290,14 +302,14 @@ def cmd_publish(a, cfg, con):
     if issues:
         sys.exit("blocked:\n  " + "\n  ".join(issues))
     print_post(post, cfg, full=True)
-    live = [p for p, d in post["deliveries"].items()
-            if d["status"] in ("pending", "failed") and cfg.route(p) != "dryrun"]
+    live = [accounts.describe(d) for d in post["deliveries"].values()
+            if d["status"] in ("pending", "failed") and cfg.route(d["platform"]) != "dryrun"]
     if live and not a.yes:
         ans = input(f"\nPost this LIVE to {', '.join(live)} now? Type 'post' to confirm: ")
         if ans.strip().lower() != "post":
             sys.exit("cancelled")
     for p, d in post["deliveries"].items():
-        if d["status"] == "failed":
+        if d["status"] == "failed" and not db.retry_blocked(d):
             db.update_delivery(con, post["id"], p, status="pending", attempts=0)
     db.update_post(con, post["id"], approved_at=db.now(), scheduled_at=None)
     print(engine.run_once(con, cfg))
@@ -332,19 +344,22 @@ def cmd_daemon(a, cfg, con):
 
 def cmd_retry(a, cfg, con):
     post = need_post(con, a.id)
-    for p in platforms_arg(a.platforms):
-        if p in post["deliveries"] and db.retry_blocked(post["deliveries"][p]):
-            print(f"{p}: preserved upload receipt or history hold")
-            continue
-        if p in post["deliveries"] and post["deliveries"][p]["status"] not in ("skipped",):
-            db.update_delivery(con, post["id"], p, status="pending", error=None, attempts=0,
+    for key in db.keys_for(post, platforms_arg(a.platforms)):
+        d = post["deliveries"][key]
+        if db.retry_blocked(d):
+            print(f"{accounts.describe(d)}: preserved upload receipt or history hold")
+        elif d["status"] != "skipped":
+            db.update_delivery(con, post["id"], key, status="pending", error=None, attempts=0,
                                remote_id=None, url=None, meta={})
-            print(f"{p}: reset to pending")
+            print(f"{accounts.describe(d)}: reset to pending")
 
 
 def cmd_mark(a, cfg, con):
     post = need_post(con, a.id)
-    db.update_delivery(con, post["id"], a.platform, status=a.status, url=a.url, error=None)
+    keys = db.keys_for(post, [a.platform])
+    if len(keys) != 1:
+        sys.exit(f"{a.platform} has {len(keys)} destinations on this post; mark it in the dashboard")
+    db.update_delivery(con, post["id"], keys[0], status=a.status, url=a.url, error=None)
     db.log(con, "info", f"manually marked {a.status}", post["id"], a.platform)
     print_post(need_post(con, post["id"]), cfg)
 
@@ -433,7 +448,7 @@ def build() -> argparse.ArgumentParser:
     sp.add_argument("video")
     sp.add_argument("--title")
     sp.add_argument("--caption")
-    sp.add_argument("--to", help="comma list or 'all' (default)")
+    sp.add_argument("--to", help="comma list or 'all' (includes LinkedIn and X)")
     sp.add_argument("--at", help="'2026-10-24 09:00' (Pacific) or 'now'")
     sp.add_argument("--ai", action="store_true", help="draft captions with Whisper + Claude")
     sp = add("import", cmd_import, "queue every new MP4 in Shorts Ready as drafts")

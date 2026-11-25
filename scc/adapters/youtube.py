@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from .. import media, oauth, secrets
 from ..config import Config
 from .base import (
@@ -27,6 +29,19 @@ from .base import (
     pre_resp,
 )
 
+LEGACY_TOKEN = "youtube.refresh_token"
+
+
+def token_name(channel: str | None) -> str:
+    return f"{LEGACY_TOKEN}.{channel}" if channel else LEGACY_TOKEN
+
+
+def channel_info(item: dict[str, Any]) -> dict[str, str]:
+    snippet = item.get("snippet") or {}
+    return {"id": str(item["id"]), "title": snippet.get("title") or "",
+            "handle": snippet.get("customUrl") or ""}
+
+
 AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN = "https://oauth2.googleapis.com/token"
 SCOPES = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly"
@@ -38,8 +53,12 @@ CHANNELS = "https://www.googleapis.com/youtube/v3/channels"
 class YouTube:
     name = "youtube"
 
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, channel: str | None = None):
         self.cfg = cfg
+        # Each channel's sign-in has its own Keychain item, so signing in to a second
+        # channel can never replace the first. None = the original single sign-in.
+        self.channel = channel
+        self.token_name = token_name(channel)
         self._token: tuple[str, float] | None = None
 
     # ---- auth -------------------------------------------------------------
@@ -48,11 +67,13 @@ class YouTube:
             return False, "set youtube.client_id — see SETUP.md § YouTube"
         if not secrets.get("youtube.client_secret"):
             return False, "run: scc secret set youtube.client_secret"
-        if not secrets.get("youtube.refresh_token"):
+        if not secrets.get(self.token_name):
             return False, "not signed in — run: scc connect youtube"
         return True, "ready (uploads stay Private until the API audit clears)"
 
-    def connect(self, port: int = 8789) -> str:
+    def connect(self, port: int = 8789) -> dict[str, str]:
+        """Sign in and store the refresh token under the channel it belongs to.
+        Returns {"id", "title", "handle"} for that channel."""
         cid = self.cfg.get("youtube", "client_id")
         csec = secrets.require("youtube.client_secret")
         redirect = f"http://127.0.0.1:{port}/callback"
@@ -71,12 +92,14 @@ class YouTube:
             if not tok.get("refresh_token"):
                 raise RuntimeError("Google returned no refresh token; remove the app's access at "
                                    "myaccount.google.com/permissions and connect again.")
-            secrets.put("youtube.refresh_token", tok["refresh_token"])
-            ch = http.get("https://www.googleapis.com/youtube/v3/channels",
-                          params={"part": "snippet", "mine": "true"},
+            ch = http.get(CHANNELS, params={"part": "snippet", "mine": "true"},
                           headers={"Authorization": f"Bearer {tok['access_token']}"}).json()
         items = ch.get("items") or []
-        return items[0]["snippet"]["title"] if items else "(no channel found on this account)"
+        if not items or not items[0].get("id"):
+            raise RuntimeError("That Google account has no YouTube channel; nothing was saved.")
+        channel = channel_info(items[0])
+        secrets.put(token_name(channel["id"]), tok["refresh_token"])
+        return channel
 
     def _access_token(self) -> str:
         if self._token and self._token[1] > time.time() + 60:
@@ -86,7 +109,7 @@ class YouTube:
                 tok = pre(lambda: http.post(TOKEN, data={
                     "client_id": self.cfg.get("youtube", "client_id"),
                     "client_secret": secrets.require("youtube.client_secret"),
-                    "refresh_token": secrets.require("youtube.refresh_token"),
+                    "refresh_token": secrets.require(self.token_name),
                     "grant_type": "refresh_token",
                 }), "google token refresh")
         except secrets.MissingSecret as e:
@@ -98,6 +121,19 @@ class YouTube:
             raise NotSubmitted("YouTube sign-in failed — reconnect with: scc connect youtube")
         self._token = (tok["access_token"], time.time() + int(tok.get("expires_in", 3600)))
         return self._token[0]
+
+    def current_channel(self) -> dict[str, str] | None:
+        """The channel this sign-in controls right now (None if it has none)."""
+        try:
+            with client(20) as http:
+                r = http.get(CHANNELS, params={"part": "snippet", "mine": "true"},
+                             headers={"Authorization": f"Bearer {self._access_token()}"})
+        except httpx.HTTPError as e:
+            raise NotSubmitted(f"YouTube is unreachable ({e.__class__.__name__})") from e
+        if r.status_code >= 400:
+            raise NotSubmitted(f"YouTube API HTTP {r.status_code}")
+        items = r.json().get("items") or []
+        return channel_info(items[0]) if items and items[0].get("id") else None
 
     def verify(self, platform: str) -> tuple[bool, str]:
         try:

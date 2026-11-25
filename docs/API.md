@@ -11,7 +11,7 @@ Conventions
 - All timestamps on the wire are ISO-8601 **UTC** strings (`2026-10-24T16:00:00+00:00`).
   The UI converts to/from local time using `settings.timezone` (IANA, default America/Los_Angeles).
   Local dates (no time) are `YYYY-MM-DD` strings interpreted in `settings.timezone`.
-- Platforms: `youtube`, `instagram`, `facebook`, `tiktok`. Routes: `dryrun`, `direct`, `upload_post`.
+- Platforms include `youtube`, `instagram`, `facebook`, `tiktok`, `linkedin` and `x`. All support `dryrun` and `upload_post`. The first four also support `direct`. The platform's `configured` object lists its supported live routes.
 
 ## Static
 | GET | Returns |
@@ -26,9 +26,9 @@ Conventions
 {
   "settings": {
     "timezone": "America/Los_Angeles",
-    "shorts_folder": "~/Movies/Shorts Ready",
+    "shorts_folder": "/Users/you/Movies/Shorts Ready",
     "schedule": { "slots": ["09:00", "17:00"], "days": ["mon","tue","wed","thu","fri","sat","sun"] },
-    "routing": { "youtube": "dryrun", "instagram": "dryrun", "facebook": "dryrun", "tiktok": "dryrun" },
+    "routing": { "youtube": "dryrun", "instagram": "dryrun", "facebook": "dryrun", "tiktok": "dryrun", "linkedin": "dryrun", "x": "dryrun" },
     "tiktok_mode": "inbox"
   },
   "platforms": {                      // one per platform
@@ -63,11 +63,23 @@ Conventions
   "duration": 46.9,                                        // seconds, from ffprobe, cached
   "duplicate_of": ["otherId", ...],                        // posts whose normalized title-slug matches
   "bucket": "draft|scheduled|posting|posted|attention",    // see below
-  "deliveries": { "youtube": { "status": "pending", "route": "dryrun|null", "url": null, "error": null,
-                               "attempts": 0, "meta": { "note": ".." }, "updated_at": "<iso>" }, ... }
+  "deliveries": { "youtube": { "status": "pending", "route": "dryrun|null", "url": null, "remote_id": null, "error": null,
+                               "attempts": 0, "meta": { "note": ".." }, "updated_at": "<iso>", "accounts": ["@handle"] }, ... }
+                                                           // one roll-up per platform (its worst-off destination);
                                                            // skipped platforms ARE included with status "skipped"
+  "brand": "wam|null", "brand_name": "Why AI Matters|null",
+  "destinations": [ { "key": "tiktok:<account id>" /* or "tiktok" with no account chosen */, "platform": "tiktok",
+                      "account_id": "..", "account": "@handle", "handle": "@handle", "name": "..", "brand_id": "..",
+                      "brand": "..", "profile": "<upload-post profile | channel id>",
+                      "account_state": "ok|missing|expired|null", "status": "..", "route": "..", "url": null,
+                      "remote_id": null, "error": null, "needs_request_check": false, "attempts": 0, "meta": {},
+                      "updated_at": "<iso>" } ]            // every destination, one per account
 }
 ```
+State also carries `brands: [{id, name}]`, `accounts: [{id, platform, platform_id, handle, name, label, conn:
+"upload_post|direct", profile, brand_id, brand_name, is_default, status: "verified|expired|missing", detail}]`,
+`profiles: [{name, present}]`, `upload_post_plan: {limit, plan}` and `receipt_review: [{sha256, platform, post_id,
+status, url, title}]` (uploads whose receiving account is unconfirmed). Events carry `account`.
 `bucket` rules (first match wins, ignoring `skipped` deliveries):
 1. any delivery `failed` or `needs_review` → `attention`
 2. any delivery `uploading` or `processing` → `posting`
@@ -81,16 +93,28 @@ Conventions
 |---|---|---|
 | `/api/import` | `{}` | import new MP4s from shorts_folder as drafts → `{ok, imported}` |
 | `/api/run` | `{}` | run one scheduler pass in background → `{ok}` |
-| `/api/posts/<id>` | any of `{title, caption, overrides, targets: [platforms], scheduled_at: iso\|null}` | update. Changing title/caption/overrides on an approved post clears approval (response `{ok, post, unapproved: true}`) |
+| `/api/posts/<id>` | any of `{title, caption, overrides, brand, destinations: [{platform, account_id\|null}], targets: [platforms], scheduled_at: iso\|null}` | update. `destinations` sets the exact accounts; `brand` re-suggests that brand's accounts; `targets` is the older by-platform form. Changing title/caption/overrides or any destination on an approved post clears approval (response `{ok, post, unapproved: true}`) |
 | `/api/posts/<id>/approve` | `{}` | preflight then approve; 400 `{error, issues}` if blocked → `{ok, post}` (`unapprove`/`retry` also return `post`) |
 | `/api/posts/<id>/unapprove` | `{}` | back to draft (keeps scheduled_at) |
 | `/api/posts/<id>/publish` | `{"confirm": "post"}` | approve, clear schedule, post now (background) |
 | `/api/posts/<id>/captions` | `{}` | enqueue AI caption draft (409 if already queued/running) |
-| `/api/posts/<id>/retry` | `{platforms: [..]}` | reset those deliveries to pending (409 if any is uploading/processing) |
+| `/api/posts/<id>/retry` | `{keys: [..]}` or `{platforms: [..]}` | reset only those destinations to pending (409 if any is uploading/processing) |
+| `/api/posts/<id>/history` | `{key, decision: "existing"\|"absent", url?}` | record the account-history check for one destination |
 | `/api/posts/<id>/remove` | `{}` | delete from queue (409 if in flight) |
 
+## Brands and accounts
+| POST | Body | Effect |
+|---|---|---|
+| `/api/accounts/discover` | `{}` | read Upload-Post profiles and their accounts (read-only there), then attach provable old receipts → `{ok, detail, proven, review}` |
+| `/api/accounts/profile` | `{profile}` | create an empty Upload-Post profile, then discover |
+| `/api/accounts/link` | `{profile, platforms?}` | → `{ok, url}`: Upload-Post's page for signing that profile in to accounts |
+| `/api/accounts/map` | `{account_id \| profile, brand_id\|null, default?}` | assign an account (or every verified account on a profile) to a brand; `default` makes it the brand's suggestion. Deliveries that already name an account never move |
+| `/api/accounts/remove` | `{account_id}` | sign one directly-connected YouTube channel out |
+| `/api/brands` | `{name, id?}` | add or rename a brand → `{ok, id}` |
+| `/api/receipts/assign` | `{account_id, items: [{sha256, platform}]}` | confirm which account earlier uploads went to |
+
 ## Bulk
-`POST /api/bulk` `{ "action": "captions|approve|unapprove|remove|targets|unschedule", "ids": [..], "targets": [..] }`
+`POST /api/bulk` `{ "action": "captions|approve|unapprove|remove|targets|brand|unschedule", "ids": [..], "targets": [..], "brand": ".." }`
 → `{ ok: true, results: { "<id>": "ok" | "<error message>" } }` (per-id; one failure doesn't stop others).
 `captions` enqueues each id on the caption queue (sequential worker — never run Whisper/Claude in parallel).
 
@@ -103,7 +127,7 @@ A slot is **taken** if any post has `scheduled_at` equal to that slot instant (t
 | GET | `/api/slots` | `?from=YYYY-MM-DD&days=N` (N ≤ 120, default 28) | `{ slots: [ { at: iso, local: "Fri Oct 24 9:00 AM", post_id: "..|null" } ] }` — future slots only (past ones omitted) |
 | POST | `/api/schedule/auto` | `{ ids: [..], start: "YYYY-MM-DD"\|null, approve: bool, dry_run: bool }` | Fills the next free slots (from `start`, default now) in the order of `ids`. Ids that fail preflight while `approve: true` are not scheduled and appear in `errors`. `dry_run: true` returns the plan without saving. → `{ ok, assigned: { id: iso }, errors: { id: "msg" } }` |
 | POST | `/api/schedule/clear` | `{ ids: [..] }` | sets scheduled_at null AND clears approval (approved + no time = "post now") → `{ok, results: {id: "ok"\|msg}}` |
-| POST | `/api/settings` | any of `{ timezone, shorts_folder, schedule: {slots, days}, routing: {platform: route}, tiktok_mode }` | validate + save config.toml → `{ok, settings}` ; slots must be `HH:MM` 24h, days from mon..sun |
+| POST | `/api/settings` | any of `{ timezone, shorts_folder, schedule: {slots, days}, routing: {platform: route}, tiktok_mode, import_brand }` | validate + save config.toml → `{ok, settings}` ; slots must be `HH:MM` 24h, days from mon..sun |
 
 Moving one post on the calendar = `POST /api/posts/<id>` with a new `scheduled_at`.
 

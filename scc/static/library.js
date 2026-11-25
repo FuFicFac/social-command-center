@@ -2,7 +2,7 @@
 import {
   h, icon, platIcon, thumbImg, toast, confirmModal, openPopover, apiPost, errText, refreshState, reportBulk,
   posts, postById, titleOf, jobOf, isLocked, fmtDuration, fmtSlot, platformDots, activeDeliveries, STATUS,
-  ORDER, PLAT, ui, openPost, plural, settings, store, debounce,
+  ORDER, PLAT, ui, openPost, plural, settings, store, debounce, destinationSummary,
 } from "./core.js";
 import { openAutoSchedule } from "./schedule.js";
 
@@ -83,10 +83,11 @@ export function createLibrary() {
   } }, icon("calendar", 15), "Auto-schedule…");
   const bUnsched = h("button", { class: "btn sm", type: "button", onclick: unschedule }, "Unschedule");
   const bPlat = h("button", { class: "btn sm", type: "button", onclick: () => platformsPopover(bPlat) }, "Platforms…", icon("chevD", 14));
+  const bBrand = h("button", { class: "btn sm", type: "button", onclick: () => brandPopover(bBrand) }, "Brand…", icon("chevD", 14));
   const bRemove = h("button", { class: "btn sm danger", type: "button", onclick: remove }, icon("trash", 15), "Remove");
   const bClear = h("button", { class: "btn sm ghost", type: "button", onclick: () => { ui.selected.clear(); renderSelection(); } }, "Clear");
   const nSel = h("strong", { class: "nsel" });
-  bar.append(nSel, h("span", { class: "bar-sep" }), bCaptions, bApprove, bAuto, bUnsched, bPlat, h("span", { class: "spacer" }), bRemove, bClear);
+  bar.append(nSel, h("span", { class: "bar-sep" }), bCaptions, bApprove, bAuto, bUnsched, bPlat, bBrand, h("span", { class: "spacer" }), bRemove, bClear);
 
   const visibleOrderSelected = () => visible.filter((p) => ui.selected.has(p.id)).map((p) => p.id)
     .concat(selIds().filter((id) => !visible.some((p) => p.id === id)));
@@ -108,6 +109,17 @@ export function createLibrary() {
     });
     if (!ok) return;
     await runBulk("remove", (n) => `Removed ${plural(n, "short")}.`, "removed");
+  }
+  function brandPopover(anchor) {
+    const ids = selIds(); if (!ids.length) return;
+    const list = store.state?.brands || [];
+    const pop = openPopover(anchor, h("div", { class: "pop-body" },
+      h("div", { class: "pop-title" }, `Brand for ${plural(ids.length, "short")}`),
+      h("div", { class: "faint sm" }, "Unposted destinations switch to the brand's accounts. Approvals are cleared so you can check them."),
+      [...list, { id: "", name: "No brand" }].map((b) => h("button", { class: "btn sm ghost", type: "button", onclick: async () => {
+        pop.close();
+        await runBulk("brand", (n) => `Set ${b.name} on ${plural(n, "short")}.`, "updated", { brand: b.id || null });
+      } }, b.name))));
   }
   function platformsPopover(anchor) {
     const ids = selIds(); if (!ids.length) return;
@@ -161,7 +173,8 @@ export function createLibrary() {
   }
   function sigOf(p) {
     return JSON.stringify([p.updated_at, p.bucket, p.title, p.caption ? 1 : 0, p.scheduled_at, p.approved_at, p.duplicate_of, jobOf(p.id),
-      Object.entries(p.deliveries || {}).map(([k, d]) => [k, d.status, d.error ? 1 : 0])]);
+      Object.entries(p.deliveries || {}).map(([k, d]) => [k, d.status, d.error ? 1 : 0]),
+      p.brand_name, (p.destinations || []).map((d) => [d.key, d.account, d.status])]);
   }
   function fillCard(entry, p) {
     const el = entry.el;
@@ -191,6 +204,7 @@ export function createLibrary() {
         h("div", { class: "vtitle", title: titleOf(p) }, titleOf(p)),
         !hasCap && p.bucket !== "posted" ? h("div", { class: "vhint" }, "No caption yet") : null,
         h("div", { class: "vmeta" }, platformDots(p), statusPill(p)),
+        h("div", { class: "vacct", title: destinationSummary(p) }, destinationSummary(p, { short: true }) || "Nothing selected"),
         whenLine(p),
         dupNames.length ? h("span", { class: "badge dup", title: `Looks like: ${dupNames.join(", ")}` }, "Possible duplicate") : null));
     renderCardSelected(entry, p.id);

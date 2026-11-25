@@ -141,14 +141,34 @@ Run `.venv/bin/python scripts/install-intake.py` on the Mac to install the dashb
 
 Open **Shorts inventory** to review existing exports and their YouTube receipts. **Prepare for Instagram, Facebook and TikTok** creates an unapproved local draft from the selected item. Multiple paths for identical media share one entry. Some inventory entries are previews or alternate cuts.
 
-New vertical renders up to three minutes enter the Command Center with copy for YouTube, Instagram, Facebook and TikTok. The default release setting requires approval. The opt-in setting `fini.auto_approve_new_shorts` applies only to future folder drops. A new Short waits for a real route on each platform. The existing library and individually chosen archive files stay under manual control.
+New vertical renders up to three minutes enter the Command Center with draft copy for all six platforms. Select LinkedIn or X in the editor to add that destination. Connect the corresponding account to your Upload-Post profile and choose its route in **Connections & Settings**. LinkedIn posts to the personal profile. The editor shows each destination’s post ID, link and Upload-Post request ID when available. Adding a destination clears prior approval.
 
-The local `youtube.uploads_paused` setting excludes YouTube from new Shorts and holds long-form metadata locally. It also blocks YouTube on every Command Center delivery route. A held long-form package remains available for individual review when uploading resumes.
+The default release setting requires approval. The opt-in setting `fini.auto_approve_new_shorts` applies only to future folder drops. Each destination needs an account-history check and a live route. The existing library and individually chosen archive files stay under manual control.
+
+The local `youtube.uploads_paused` setting excludes YouTube from new watcher Shorts and holds long-form packages locally. Each long-form package includes a 1280 × 720 JPEG taken from the video at `data/fini-review/<sha256>/thumbnail.jpg`. The pause blocks YouTube on every Command Center delivery route.
 
 For a destination with unverified posting history, the editor offers **Already uploaded** and **Checked account · no match**. An existing upload can include its original link. Checking history preserves the post’s normal approval setting. Confirmed uploads are recorded by file hash and platform in `upload_receipts`, independently of the editable queue, so removing a queue entry or renaming the exact file preserves its history. Re-encoded or recut videos may require audio or transcript comparison.
 
-The main Upload-Post profile is the Why AI Matters destination. For a separate A-List profile, use `scc config fini.alist_upload_post_user PROFILE`. A-List deliveries wait until their own destination is configured. Use **Connections & Settings** to save the API key in Keychain, verify the profile, and choose each platform's route. Use the local editor to preview and approve posts.
+Each brand has its own accounts. Connect and map them under **Connections & Settings → Brands & accounts** (see "Brands and accounts" below). A Short's brand suggests that brand's accounts; a delivery with no account chosen waits until you pick one. Use **Connections & Settings** to save the API key in Keychain and choose each platform's route. Use the local editor to preview and approve posts.
 
 Long-form renders use private YouTube Studio staging after transcript-based channel selection. Chrome must be signed in with the intended channel available. The Mac must be awake and its graphical session available for Studio interaction. An interrupted transfer is held with the available receipt. The user can add the thumbnail in Studio. The destination never receives an automatic public release from this long-form uploader.
 
-The local intake ledger is the `fini_items` table in `data/scc.sqlite3`. Its `phase`, `message` and `receipt` columns distinguish pending preparation, private Studio staging, review and delivered Shorts drafts. The system log for intake is `~/Library/Logs/com.creator.fini-intake.log`.
+The local intake ledger is the `fini_items` table in `data/scc.sqlite3`. Its `phase`, `message` and `receipt` columns distinguish pending preparation, private Studio staging, review and delivered Shorts drafts. The system log for intake is `~/Library/Logs/<label_prefix>.fini-intake.log`.
+
+## Brands and accounts
+
+A destination is a platform plus the account that receives it. Every delivery stores the account's stable platform ID (the YouTube channel ID, the TikTok `open_id`, the Instagram user ID) at the moment you select it, so a later change of defaults or a reconnected profile cannot redirect a post that is already approved.
+
+1. **Connections & Settings → Brands & accounts → Discover accounts.** This reads your Upload-Post profiles and the accounts connected to each. It changes nothing in Upload-Post.
+2. **Add a brand** if it isn't listed.
+3. **Add an Upload-Post profile** for the brand (one profile holds one account per platform, so a second TikTok needs its own profile). Click **Connect accounts** on the profile, sign in to the brand's accounts on the Upload-Post page that opens, then **Discover accounts** again.
+4. On the profile, set **Assign all to** → the brand. The first account a brand gets on a platform becomes its suggested account; **Make suggested** changes that for future Shorts only.
+5. For direct YouTube uploads, **Sign in with Google** once per channel. Each channel's sign-in is its own Keychain item (`youtube.refresh_token.<channel id>`), so a second sign-in never replaces the first.
+
+In the editor, **Brand** suggests accounts and **Where it goes** lists every connected account per platform. Tick exactly the accounts you want, including two on the same platform. Changing destinations clears the approval.
+
+At publish time each selected account is checked against what its connection holds right now. If the account is gone, its sign-in expired, or the profile now points at a different account, that delivery is held under **Needs attention** and nothing is sent to it. Reconnect the original account and press **Retry**, or pick another account.
+
+Duplicate protection is per account: the same file is never sent twice to the same account, and can go to a different account when you select it. Uploads recorded before accounts existed are attached to an account only when saved evidence proves the destination (the permalink names the handle, or the delivery recorded the profile it went through). The rest are listed under **Upload history to confirm**; their links are kept, and the same file is held for that platform until you confirm where it went.
+
+`scripts/multi-account-demo.py` proves all of this on a copy of the database with simulated publishing. Defaults that are specific to your Mac live in `config.toml`: `general.creator_name`, `general.label_prefix`, `fini.folder`, `fini.channel_wam`, `fini.channel_alist`.

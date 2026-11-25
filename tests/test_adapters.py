@@ -864,6 +864,67 @@ def test_upload_post_verify_without_key_never_raises(store, net):
     assert not ok and not net.calls
 
 
+def test_timeout_reconciles_linkedin_and_x_from_one_upload(tmp_path, monkeypatch, up):
+    from scc import accounts, db, engine, media, server
+
+    adapter, net = up
+    cfg = adapter.cfg
+    con = db.connect(tmp_path / "queue.sqlite3")
+    video = tmp_path / "review.mp4"
+    video.write_bytes(b"local video fixture")
+    platforms = ["linkedin", "x"]
+    pid = db.create_post(con, str(video), media.sha256(video), "Video title", "Default", platforms)
+    copies = {"linkedin": {"caption": "A practical takeaway"}, "x": {"caption": "A short hook"}}
+    db.update_post(con, pid, overrides=copies, approved_at=db.now())
+    monkeypatch.setattr(media, "probe", lambda _: media.Probe(39.4, 1080, 1920, 100000, "h264", True))
+    for p in platforms:
+        cfg.set("routing", p, "upload_post")
+    engine.publish_post(con, cfg, db.get_post(con, pid))
+    assert not net.calls  # approval alone does not establish account history
+    social = {"linkedin": {"username": "li-1", "handle": "creator", "display_name": "Creator"},
+              "x": {"username": "x-1", "handle": "@creator", "display_name": "Creator"}}
+    net.on("GET", "/uploadposts/users/creator", J({"profile": {
+        "username": "creator", "social_accounts": social}}))
+    accounts.sync_profiles(con, [{"username": "creator", "social_accounts": social}])
+    keys = {}
+    for a in accounts.list_accounts(con):
+        db.rebind(con, pid, a["platform"], a["id"])
+        keys[a["platform"]] = f"{a['platform']}:{a['id']}"
+        db.update_delivery(con, pid, keys[a["platform"]], meta={"history_checked_at": db.now()})
+    db.update_post(con, pid, approved_at=db.now())
+    net.on("POST", "/api/upload", httpx.ReadTimeout("accepted, but the reply was lost"))
+    engine.publish_post(con, cfg, db.get_post(con, pid))
+    req, = [c for c in net.calls if c.method == "POST"]  # one request for the one profile
+    assert req.content.count(b'name="video";') == 1
+    for field, value in [("platform[]", "linkedin"), ("platform[]", "x"),
+                         ("linkedin_title", "Video title"), ("target_linkedin_page_id", "personal"),
+                         ("linkedin_description", "A practical takeaway"), ("x_title", "A short hook")]:
+        assert f'name="{field}"\r\n\r\n{value}\r\n'.encode() in req.content
+    request_id = req.headers["idempotency-key"]
+    for d in db.get_post(con, pid)["deliveries"].values():
+        assert d["status"] == "needs_review" and d["meta"]["request_id"] == request_id
+        assert db.retry_blocked(d)
+    results = [{"platform": "linkedin", "status": "completed", "platform_post_id": "urn:li:ugcPost:1",
+                "post_url": "https://www.linkedin.com/feed/update/urn:li:ugcPost:1/"}]
+    net.on("GET", "/uploadposts/status", J({"status": "in_progress", "results": results}))
+    engine.poll_in_flight(con, cfg)
+    assert db.get_post(con, pid)["deliveries"][keys["x"]]["status"] == "needs_review"
+    net.routes.clear()
+    results.append({"platform": "x", "success": True, "platform_post_id": "2",
+                    "post_url": "https://x.com/example/status/2"})
+    net.on("GET", "/uploadposts/status", J({"status": "completed", "results": results}))
+    engine.poll_in_flight(con, cfg)
+    engine.publish_post(con, cfg, db.get_post(con, pid))
+    shown = server.present_posts(con, fill_durations=0)[0]["deliveries"]
+    receipts = con.execute("SELECT platform,remote_id,url,account_ref FROM upload_receipts").fetchall()
+    assert len(receipts) == 2 and {r["account_ref"] for r in receipts} == {"li-1", "x-1"}
+    for p, remote_id, url, _ in receipts:
+        assert shown[p]["remote_id"] == remote_id and shown[p]["url"] == url
+        assert shown[p]["status"] == "published" and shown[p]["meta"]["history_checked_at"]
+    assert shown["x"]["remote_id"] == "2" and shown["linkedin"]["remote_id"] == "urn:li:ugcPost:1"
+    assert all(r.url.params["request_id"] == request_id for r in net.to("/uploadposts/status"))
+
+
 def test_upload_post_readiness_no_network(store, net):
     UploadPost(make_cfg()).readiness("tiktok")
     TikTok(make_cfg()).readiness("tiktok")

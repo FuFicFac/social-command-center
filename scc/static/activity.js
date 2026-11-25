@@ -1,5 +1,5 @@
 // activity.js — reverse-chronological event list.
-import { h, platIcon, icon, S, postById, titleOf, openPost, relTime, fmtSlot } from "./core.js";
+import { h, platIcon, icon, S, postById, titleOf, openPost, relTime, fmtSlot, PLAT } from "./core.js";
 
 export function createActivity() {
   const root = h("div", { class: "view activity" });
@@ -17,11 +17,16 @@ export function createActivity() {
     }
     list.replaceChildren(...ev.map((e) => {
       const p = e.post_id ? postById(e.post_id) : null;
+      const plats = (e.platform || "").split(",").filter((x) => PLAT[x]);
+      // Which account this happened on, with the short's brand.
+      const owner = plats.length === 1 ? (S()?.accounts || []).find((a) => a.platform === plats[0] && a.label === e.account) : null;
+      const brand = owner?.brand_name || (owner ? "" : p?.brand_name) || "";
+      const where = e.account ? [plats.length === 1 ? PLAT[plats[0]].name + " " : "", e.account, brand ? ` · ${brand}` : ""].join("") : "";
       return h("div", { class: `event lvl-${e.level}` },
         h("span", { class: "ev-bar" }),
-        h("div", { class: "ev-plat" }, e.platform ? platIcon(e.platform, 16) : icon("info", 16)),
+        h("div", { class: "ev-plat" }, plats.length ? plats.map((x) => platIcon(x, 16)) : icon("info", 16)),
         h("div", { class: "ev-main" }, h("div", { class: "ev-msg" }, e.message),
-          h("div", { class: "ev-sub faint sm" }, h("span", { title: fmtSlot(e.at, " at ") }, relTime(e.at)), p ? [" · ", h("a", { class: "link", href: `#/post/${p.id}` }, titleOf(p))] : (e.post_id ? " · (removed short)" : ""))));
+          h("div", { class: "ev-sub faint sm" }, where ? [h("span", { class: "ev-acct" }, where), " · "] : null, h("span", { title: fmtSlot(e.at, " at ") }, relTime(e.at)), p ? [" · ", h("a", { class: "link", href: `#/post/${p.id}` }, titleOf(p))] : (e.post_id ? " · (removed short)" : ""))));
     }));
   }
   render();

@@ -78,6 +78,8 @@ LIMITS = {
     "instagram": (3, 900, 300 * 2**20, 2200, 0),
     "facebook": (3, 90, 1 * 2**30, 63206, 0),
     "tiktok": (3, 600, 4 * 2**30, 2200, 0),
+    "linkedin": (3, 1800, 500 * 2**20, 3000, 400),
+    "x": (0.5, 1200, 3 * 2**30, 280, 0),
 }
 
 
@@ -101,7 +103,9 @@ def preflight(post: dict[str, Any], platform: str, p: Probe) -> list[str]:
             problems.append("YouTube titles can't contain < or >")
     if len(c["caption"]) > cap_limit:
         problems.append(f"caption is {len(c['caption'])} chars (max {cap_limit} on {platform})")
-    if platform in ("instagram", "tiktok", "facebook") and not c["caption"]:
+    if platform == "linkedin" and len(c["title"]) > title_limit:
+        problems.append(f"LinkedIn video title exceeds {title_limit} characters")
+    if platform != "youtube" and not c["caption"]:
         problems.append(f"{platform} caption is empty")
     return problems
 
@@ -111,7 +115,8 @@ def post_issues(post: dict[str, Any], probe_result: Probe | None = None) -> list
     p = Path(post["video_path"])
     if not p.exists():
         return [f"video missing: {p}"]
-    live = [pf for pf, d in post["deliveries"].items() if d["status"] in ("pending", "failed")]
+    live = list(dict.fromkeys(d["platform"] for d in post["deliveries"].values()
+                              if d["status"] in ("pending", "failed")))
     if not live:
         return []
     try:
@@ -133,8 +138,10 @@ def duration(path: str | Path) -> float | None:
         return None
 
 
-def thumbnail(video: str | Path, out: Path) -> bool:
-    """Write a 360px-wide poster frame (≈1s in; falls back to frame 0 for very short clips)."""
+def thumbnail(video: str | Path, out: Path, *, youtube: bool = False) -> bool:
+    """Write a poster frame, or a 16:9 thumbnail for private YouTube review."""
+    scale = ("scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1"
+             if youtube else "scale=360:-2")
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.name + ".part.jpg")
     for seek in ("1", "0"):
@@ -142,7 +149,7 @@ def thumbnail(video: str | Path, out: Path) -> bool:
         try:
             subprocess.run(
                 ["ffmpeg", "-v", "error", "-y", "-ss", seek, "-i", str(video), "-frames:v", "1",
-                 "-vf", "scale=360:-2", str(tmp)],
+                 "-vf", scale, str(tmp)],
                 capture_output=True, timeout=45, check=True)
         except (subprocess.SubprocessError, OSError):
             continue

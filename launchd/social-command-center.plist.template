@@ -1,18 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Filled in by scripts/install-scheduler.sh: __LABEL__, __UV__ and __ROOT__. -->
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.creator.social-command-center</string>
+  <key>Label</key><string>__LABEL__</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/you/.local/bin/uv</string>
+    <string>__UV__</string>
     <string>--directory</string>
-    <string>/path/to/social-command-center</string>
+    <string>__ROOT__</string>
     <string>run</string><string>scc</string><string>run</string>
   </array>
   <key>StartInterval</key><integer>60</integer>
   <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>/path/to/social-command-center/data/scheduler.log</string>
-  <key>StandardErrorPath</key><string>/path/to/social-command-center/data/scheduler.log</string>
+  <key>StandardOutPath</key><string>__ROOT__/data/scheduler.log</string>
+  <key>StandardErrorPath</key><string>__ROOT__/data/scheduler.log</string>
 </dict>
 </plist>

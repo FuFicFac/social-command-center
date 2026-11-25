@@ -9,7 +9,7 @@ from datetime import date
 from pathlib import Path
 
 from scc import config, db, media
-from scc.fini import EXTENSIONS, FOLDER
+from scc.fini import EXTENSIONS, folder
 
 EXCLUDED = {
     "courses",
@@ -89,5 +89,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     refresh(
         [p.resolve() for p in args.folders]
-        or [config.SHORTS_READY, config.SHORTS_READY.parent / "Shorts Ready", FOLDER]
+        or [Path(config.load().get("general", "shorts_folder")), folder(config.load())]
     )
